@@ -1,0 +1,38 @@
+{
+  "name": "restaurant-seo-404-auditor",
+  "version": "1.0.0",
+  "description": "Local-first Playwright auditor for hard and soft 404 URLs appearing in search indexes.",
+  "type": "module",
+  "bin": {
+    "seo404": "dist/cli.js"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node scripts/copy-public.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "cli": "tsx src/cli.ts",
+    "serve": "tsx src/cli.ts serve",
+    "test": "node --import tsx --test --test-concurrency=1 tests/**/*.test.ts",
+    "test:unit": "node --import tsx --test --test-concurrency=1 tests/unit/**/*.test.ts",
+    "test:integration": "node --import tsx --test --test-concurrency=1 tests/integration/**/*.test.ts"
+  },
+  "dependencies": {
+    "csv-parse": "^7.0.2",
+    "exceljs": "^4.4.0",
+    "fast-xml-parser": "^5.11.0",
+    "googleapis": "^176.0.0",
+    "open": "^11.0.1",
+    "playwright": "^1.62.1",
+    "robots-parser": "^3.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.3",
+    "tsx": "^4.23.12",
+    "typescript": "^5.9.3"
+  },
+  "overrides": {
+    "uuid": "^11.1.1"
+  }
+}
