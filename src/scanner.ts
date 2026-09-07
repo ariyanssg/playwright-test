@@ -74,6 +74,8 @@ export class BrowserScanner {
             processed: scan.processed,
             findings: scan.findings,
             backlinkCount: this.db.backlinkCount(scanId),
+            hoursChecked: this.db.hoursCount(scanId),
+            hoursMismatches: this.db.hoursMismatchCount(scanId),
             message: `${result.classification}: ${result.normalizedUrl}`,
           });
         }
@@ -292,7 +294,7 @@ class HostGate {
   }
 }
 
-class HostLimiter {
+export class HostLimiter {
   private readonly gates = new Map<string, HostGate>();
 
   constructor(private readonly perHost: number, private readonly delayMs: number) {}

@@ -1,7 +1,8 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import ExcelJS, { type Cell, type Row, type Worksheet } from 'exceljs';
-import { CLASSIFICATIONS, type BacklinkRecord, type CandidateRecord, type Classification, type ScanResult, type StoredScan } from './types.js';
+import { CLASSIFICATIONS, type BacklinkRecord, type CandidateRecord, type Classification, type DayVerdict, type HoursComparisonRecord, type ScanResult, type StoredScan } from './types.js';
+import { DAY_INDEXES, DAY_NAMES } from './hours/schedule.js';
 import type { ScanDatabase } from './database.js';
 import { isActionable } from './database.js';
 
@@ -78,15 +79,24 @@ export async function writeReports(db: ScanDatabase, scanId: string, scanOverrid
   const backlinksCsvPath = join(scan.outputDir, 'backlinks.csv');
   const jsonPath = join(scan.outputDir, 'run.json');
   const xlsxPath = join(scan.outputDir, 'report.xlsx');
+  const hours = scan.options.checkHours ? db.listHours(scanId) : [];
+  const artifacts = [xlsxPath, findingsCsvPath, allCsvPath, backlinksCsvPath, jsonPath];
 
   await writeFile(allCsvPath, toCsv(reportRows), 'utf8');
   await writeFile(findingsCsvPath, toCsv(reportRows.filter((row) => isActionable(row.classification))), 'utf8');
   await writeFile(backlinksCsvPath, toBacklinksCsv(backlinks, candidates), 'utf8');
+  // Only written when the stage ran, so an ordinary scan produces no empty artifact.
+  if (scan.options.checkHours) {
+    const hoursCsvPath = join(scan.outputDir, 'hours.csv');
+    await writeFile(hoursCsvPath, toHoursCsv(hours), 'utf8');
+    artifacts.push(hoursCsvPath);
+  }
   await writeFile(jsonPath, `${JSON.stringify({
     scan,
     counts: db.classificationCounts(scanId),
     candidates: candidates.map(jsonCandidate),
     backlinks,
+    hours,
     coverage: {
       googleSiteOperator: 'Diagnostic and not exhaustive',
       searchApi: scan.options.discovery.includes('searchapi') ? 'First 100 Google results maximum' : 'Not used',
@@ -94,13 +104,16 @@ export async function writeReports(db: ScanDatabase, scanId: string, scanOverrid
       backlinks: scan.options.discovery.includes('backlinks')
         ? `DataForSEO backlink index, capped at ${(scan.options.backlinkLimit ?? 100_000).toLocaleString()} rows per site; not the entire web`
         : 'Not used',
+      hours: scan.options.checkHours
+        ? `Google Places regular weekly hours compared against website hours with a ${scan.options.hoursToleranceMinutes}-minute tolerance; holiday and special hours are not compared`
+        : 'Not used',
     },
   }, null, 2)}\n`, 'utf8');
-  await writeWorkbook(xlsxPath, db, scanId, candidates, backlinks, scan);
-  return [xlsxPath, findingsCsvPath, allCsvPath, backlinksCsvPath, jsonPath];
+  await writeWorkbook(xlsxPath, db, scanId, candidates, backlinks, hours, scan);
+  return artifacts;
 }
 
-async function writeWorkbook(filePath: string, db: ScanDatabase, scanId: string, candidates: CandidateRecord[], backlinks: BacklinkRecord[], scan: StoredScan): Promise<void> {
+async function writeWorkbook(filePath: string, db: ScanDatabase, scanId: string, candidates: CandidateRecord[], backlinks: BacklinkRecord[], hours: HoursComparisonRecord[], scan: StoredScan): Promise<void> {
   const workbook = new ExcelJS.Workbook();
   workbook.creator = 'Restaurant SEO 404 Auditor';
   workbook.created = new Date(scan.createdAt);
@@ -114,18 +127,22 @@ async function writeWorkbook(filePath: string, db: ScanDatabase, scanId: string,
   const broken = workbook.addWorksheet('Broken & Soft 404', { views: [{ state: 'frozen', ySplit: 1, showGridLines: false }] });
   const all = workbook.addWorksheet('All URLs', { views: [{ state: 'frozen', ySplit: 1, showGridLines: false }] });
   const backlinkSheet = workbook.addWorksheet('Backlinks', { views: [{ state: 'frozen', ySplit: 1, showGridLines: false }] });
+  const hoursSheet = scan.options.checkHours
+    ? workbook.addWorksheet('Hours Comparison', { views: [{ state: 'frozen', ySplit: 1, xSplit: 1, showGridLines: false }] })
+    : null;
   const sources = workbook.addWorksheet('Sources & Run Info', { views: [{ showGridLines: false }] });
 
-  buildSummary(summary, db, scanId, allResults.length, findings.length, backlinks.length, scan);
+  buildSummary(summary, db, scanId, allResults.length, findings.length, backlinks.length, hours, scan);
   buildResultSheet(broken, findings);
   buildResultSheet(all, allResults);
   buildBacklinksSheet(backlinkSheet, backlinks, candidates);
+  if (hoursSheet) buildHoursSheet(hoursSheet, hours);
   buildSourcesSheet(sources, candidates, scan);
   await workbook.xlsx.writeFile(filePath);
 }
 
-function buildSummary(sheet: Worksheet, db: ScanDatabase, scanId: string, checked: number, findings: number, backlinks: number, scan: StoredScan): void {
-  sheet.mergeCells('A1:F1');
+function buildSummary(sheet: Worksheet, db: ScanDatabase, scanId: string, checked: number, findings: number, backlinks: number, hours: HoursComparisonRecord[], scan: StoredScan): void {
+  sheet.mergeCells('A1:G1');
   const title = sheet.getCell('A1');
   title.value = 'Restaurant SEO 404 Audit';
   title.font = { name: 'Arial', size: 20, bold: true, color: { argb: COLORS.white } };
@@ -147,11 +164,13 @@ function buildSummary(sheet: Worksheet, db: ScanDatabase, scanId: string, checke
     if (value instanceof Date) row.getCell(2).numFmt = 'yyyy-mm-dd hh:mm:ss';
   });
 
+  const hoursMismatches = hours.filter((record) => record.status === 'mismatch').length;
   const kpis: Array<[string, number, string]> = [
     ['Unique URLs', scan.total, COLORS.blue],
     ['Checked', checked, COLORS.green],
     ['Actionable findings', findings, findings ? COLORS.red : COLORS.green],
     ['Backlinks', backlinks, COLORS.blue],
+    ['Hours mismatches', hoursMismatches, hoursMismatches ? COLORS.red : COLORS.green],
   ];
   kpis.forEach(([label, value, color], index) => {
     const column = 3 + index;
@@ -191,6 +210,9 @@ function buildSummary(sheet: Worksheet, db: ScanDatabase, scanId: string, checke
     'Soft 404 results are confidence-scored suspicions based on rendered content and the site missing-page baseline.',
     'Google site: and Search Console sources are useful coverage signals, not complete index inventories.',
     'Backlinks are the records exposed by the configured provider index, not a guaranteed inventory of the entire web.',
+    scan.options.checkHours
+      ? `Hours comparison covers the regular weekly schedule with a ${scan.options.hoursToleranceMinutes}-minute tolerance; holiday and special hours are out of scope. A mismatch means the two published sources disagree, not that the website is necessarily wrong.`
+      : 'Opening hours were not compared in this run.',
     scan.cancelRequested ? 'This is a partial report from a cancelled scan.' : 'The report includes every candidate completed when it was generated.',
   ];
   notes.forEach((note, index) => {
@@ -205,6 +227,7 @@ function buildSummary(sheet: Worksheet, db: ScanDatabase, scanId: string, checke
   sheet.getColumn(4).width = 25;
   sheet.getColumn(5).width = 25;
   sheet.getColumn(6).width = 25;
+  sheet.getColumn(7).width = 20;
   sheet.pageSetup = { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 1 };
 }
 
@@ -292,6 +315,101 @@ function buildResultSheet(sheet: Worksheet, results: ScanResult[]): void {
   sheet.pageSetup = { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0, printTitlesRow: '1:1' };
 }
 
+/**
+ * One row per restaurant, read across: an owner scans their own line. The long
+ * per-day form lives in hours.csv, which pivots and filters far better.
+ */
+function buildHoursSheet(sheet: Worksheet, hours: HoursComparisonRecord[]): void {
+  sheet.columns = [
+    { header: 'Site', key: 'site', width: 34 },
+    { header: 'Matched place', key: 'placeName', width: 30 },
+    { header: 'Address', key: 'placeAddress', width: 38 },
+    { header: 'Place ID', key: 'placeId', width: 26 },
+    { header: 'Match confidence', key: 'matchConfidence', width: 18 },
+    { header: 'Business status', key: 'businessStatus', width: 18 },
+    { header: 'Status', key: 'status', width: 20 },
+    ...DAY_INDEXES.flatMap((day) => [
+      { header: `${DAY_NAMES[day]} Google`, key: `google${day}`, width: 22 },
+      { header: `${DAY_NAMES[day]} website`, key: `website${day}`, width: 22 },
+      { header: `${DAY_NAMES[day]} verdict`, key: `verdict${day}`, width: 18 },
+    ]),
+    { header: 'Max delta (min)', key: 'maxDeltaMinutes', width: 15 },
+    { header: 'Website source', key: 'websiteMethod', width: 16 },
+    { header: 'Hours page', key: 'websiteHoursUrl', width: 44 },
+    { header: 'UTC offset (min)', key: 'utcOffsetMinutes', width: 16 },
+    { header: 'Notes', key: 'notes', width: 70 },
+  ];
+  styleHeader(sheet.getRow(1));
+
+  for (const record of hours) {
+    const days = new Map(record.days.map((day) => [day.day, day] as const));
+    const row = sheet.addRow({
+      site: record.site,
+      placeName: safeText(record.placeName ?? ''),
+      placeAddress: safeText(record.placeAddress ?? ''),
+      placeId: safeText(record.placeId ?? ''),
+      matchConfidence: record.matchConfidence,
+      businessStatus: safeText(record.businessStatus ?? ''),
+      status: record.status,
+      ...Object.fromEntries(DAY_INDEXES.flatMap((day) => {
+        const diff = days.get(day);
+        return [
+          [`google${day}`, safeText(diff?.googleText ?? '')],
+          [`website${day}`, safeText(diff?.websiteText ?? '')],
+          [`verdict${day}`, diff?.verdict ?? ''],
+        ];
+      })),
+      maxDeltaMinutes: record.maxDeltaMinutes,
+      websiteMethod: record.websiteMethod,
+      websiteHoursUrl: record.websiteHoursUrl ?? '',
+      utcOffsetMinutes: record.utcOffsetMinutes,
+      notes: safeText(record.notes.join(' · ')),
+    });
+    setHyperlink(row.getCell('site'), record.site);
+    if (record.websiteHoursUrl) setHyperlink(row.getCell('websiteHoursUrl'), record.websiteHoursUrl);
+    styleHoursStatus(row.getCell('status'), record.status);
+    if (record.matchConfidence === 'unverified') {
+      row.getCell('matchConfidence').font = { bold: true, color: { argb: COLORS.amber } };
+      row.getCell('matchConfidence').fill = solid(COLORS.paleAmber);
+    }
+    for (const day of DAY_INDEXES) {
+      const diff = days.get(day);
+      if (diff) styleHoursVerdict(row.getCell(`verdict${day}`), diff.verdict);
+    }
+    row.getCell('maxDeltaMinutes').numFmt = '#,##0';
+    row.getCell('utcOffsetMinutes').numFmt = '0';
+    row.getCell('notes').alignment = { vertical: 'top', wrapText: true };
+    row.alignment = { vertical: 'top' };
+  }
+
+  const lastRow = Math.max(1, sheet.rowCount);
+  sheet.autoFilter = { from: { row: 1, column: 1 }, to: { row: lastRow, column: sheet.columnCount } };
+  // 30 columns will not survive fitToWidth; let it print wide instead of unreadably small.
+  sheet.pageSetup = { orientation: 'landscape', fitToPage: false, printTitlesRow: '1:1' };
+}
+
+function toHoursCsv(hours: HoursComparisonRecord[]): string {
+  const headers = [
+    'Site', 'Day', 'Google Hours', 'Website Hours', 'Verdict', 'Delta Minutes', 'Status',
+    'Match Confidence', 'Matched Place', 'Place ID', 'Website Source', 'Hours Page', 'Notes',
+  ];
+  const values = hours.flatMap((record) => {
+    if (!record.days.length) {
+      return [[
+        record.site, '', '', '', record.status, '', record.status, record.matchConfidence,
+        record.placeName ?? '', record.placeId ?? '', record.websiteMethod, record.websiteHoursUrl ?? '',
+        record.notes.join(' · '),
+      ]];
+    }
+    return record.days.map((day) => [
+      record.site, DAY_NAMES[day.day], day.googleText, day.websiteText, day.verdict,
+      day.deltaMinutes, record.status, record.matchConfidence, record.placeName ?? '', record.placeId ?? '',
+      record.websiteMethod, record.websiteHoursUrl ?? '', [...day.notes, ...record.notes].join(' · '),
+    ]);
+  });
+  return `${[headers, ...values].map((row) => row.map(csvCell).join(',')).join('\n')}\n`;
+}
+
 function buildSourcesSheet(sheet: Worksheet, candidates: CandidateRecord[], scan: StoredScan): void {
   sheet.mergeCells('A1:D1');
   sheet.getCell('A1').value = 'Discovery Sources & Run Information';
@@ -327,6 +445,10 @@ function buildSourcesSheet(sheet: Worksheet, candidates: CandidateRecord[], scan
   sheet.addRow(['Configuration', 'Value']);
   styleHeader(sheet.getRow(sheet.rowCount));
   const configRows: Array<[string, string | number | boolean]> = [
+    ['Hours comparison', scan.options.checkHours],
+    ['Hours tolerance (min)', scan.options.hoursToleranceMinutes],
+    ['Hours pages per site', scan.options.hoursPageLimit],
+    ['Require verified place', scan.options.hoursRequireVerifiedPlace],
     ['Concurrency', scan.options.concurrency],
     ['Per-host concurrency', scan.options.perHostConcurrency],
     ['Host delay (ms)', scan.options.hostDelayMs],
@@ -464,6 +586,22 @@ function styleClassification(cell: Cell, classification: Classification): void {
   const good = classification === 'ok' || classification === 'redirected';
   cell.font = { bold: true, color: { argb: hard ? COLORS.red : soft ? COLORS.amber : good ? COLORS.green : COLORS.slate } };
   cell.fill = solid(hard ? COLORS.paleRed : soft ? COLORS.paleAmber : good ? COLORS.paleGreen : COLORS.gray);
+}
+
+function styleHoursStatus(cell: Cell, status: HoursComparisonRecord['status']): void {
+  const bad = status === 'mismatch';
+  const warn = status === 'minor_differences' || status === 'partial' || status === 'unmatched';
+  const good = status === 'aligned';
+  cell.font = { bold: true, color: { argb: bad ? COLORS.red : warn ? COLORS.amber : good ? COLORS.green : COLORS.slate } };
+  cell.fill = solid(bad ? COLORS.paleRed : warn ? COLORS.paleAmber : good ? COLORS.paleGreen : COLORS.gray);
+}
+
+function styleHoursVerdict(cell: Cell, verdict: DayVerdict): void {
+  const bad = verdict === 'mismatch' || verdict === 'closed_on_google' || verdict === 'closed_on_website';
+  const warn = verdict === 'minor_difference' || verdict === 'missing_website' || verdict === 'missing_google';
+  const good = verdict === 'match' || verdict === 'both_closed';
+  cell.font = { bold: true, color: { argb: bad ? COLORS.red : warn ? COLORS.amber : good ? COLORS.green : COLORS.slate } };
+  cell.fill = solid(bad ? COLORS.paleRed : warn ? COLORS.paleAmber : good ? COLORS.paleGreen : COLORS.gray);
 }
 
 function setHyperlink(cell: Cell, url: string): void {

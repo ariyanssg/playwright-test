@@ -9,11 +9,15 @@ import { discoverBacklinks } from './discovery/backlinks.js';
 import { discoverSearchApi } from './discovery/searchapi.js';
 import { discoverSitemaps, type DiscoveredUrl } from './discovery/sitemap.js';
 import { GoogleSearchConsole } from './google.js';
-import { importUrlsFromFile } from './imports.js';
+import { importRowsFromFile, type ImportedRow } from './imports.js';
+import { auditSiteHours } from './hours/audit.js';
+import { HoursInspector } from './hours/inspector.js';
+import type { PlaceHints } from './hours/match.js';
+import { selectHoursPages } from './hours/pages.js';
 import { RobotsCache } from './robots.js';
 import { BrowserScanner } from './scanner.js';
 import type { Candidate, CandidateRecord, DiscoveryEvidence, ScanOptions, ScanProgressEvent, ScanSummary, StoredScan } from './types.js';
-import { normalizeUrl, siteKey, siteOrigin, tryNormalizeUrl, uniqueUrls } from './urls.js';
+import { normalizeUrl, siteKey, siteOrigin, tryNormalizeUrl } from './urls.js';
 import { writeReports } from './reports.js';
 
 export class ScanService {
@@ -94,7 +98,14 @@ export class ScanService {
     } catch {
       // Reports do not exist yet.
     }
-    return { scan, counts: this.db.classificationCounts(scanId), sourceCounts, backlinkCount: this.db.backlinkCount(scanId), artifacts };
+    return {
+      scan,
+      counts: this.db.classificationCounts(scanId),
+      sourceCounts,
+      backlinkCount: this.db.backlinkCount(scanId),
+      hoursCounts: this.db.hoursStatusCounts(scanId),
+      artifacts,
+    };
   }
 
   onProgress(scanId: string, listener: (event: ScanProgressEvent) => void): () => void {
@@ -116,6 +127,12 @@ export class ScanService {
         this.emit(scanId, 'Checking live pages with Chromium');
         const scanner = new BrowserScanner(this.db, this.robots, initial.options, (event) => this.events.emit(`scan:${scanId}`, event));
         await scanner.scan(scanId, this.db.listCandidates(scanId, 'pending'));
+      }
+
+      if (!this.db.getScan(scanId)?.cancelRequested && initial.options.checkHours) {
+        this.db.updateScan(scanId, { status: 'comparing_hours' });
+        this.emit(scanId, 'Comparing Google and website opening hours');
+        await this.compareHours(scanId, initial.options);
       }
 
       if (!this.db.getScan(scanId)?.cancelRequested && initial.options.inspectGoogle) {
@@ -156,22 +173,33 @@ export class ScanService {
   }
 
   private async discover(scanId: string, options: ScanOptions): Promise<void> {
-    const imported: string[] = [...options.urls];
+    const imported: ImportedRow[] = options.urls.map((url) => ({ url }));
     for (const filePath of options.inputFiles) {
       try {
-        imported.push(...await importUrlsFromFile(resolve(filePath)));
+        imported.push(...await importRowsFromFile(resolve(filePath)));
       } catch (error) {
         this.db.appendWarning(scanId, `${filePath}: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
-    for (const url of uniqueUrls(imported)) this.add(scanId, url, { source: 'import' });
+    const seen = new Set<string>();
+    for (const row of imported) {
+      const normalized = tryNormalizeUrl(row.url);
+      if (!normalized || seen.has(normalized)) continue;
+      seen.add(normalized);
+      this.add(scanId, normalized, {
+        source: 'import',
+        restaurantName: row.name,
+        restaurantAddress: row.address,
+        placeId: row.placeId,
+      });
+    }
     for (const rawSite of options.sites) {
       const site = normalizeUrl(rawSite);
       this.add(scanId, site, { source: 'import' });
     }
 
     const siteMap = new Map<string, string>();
-    for (const value of [...options.sites, ...imported]) {
+    for (const value of [...options.sites, ...imported.map((row) => row.url)]) {
       const normalized = tryNormalizeUrl(value);
       if (normalized && !siteMap.has(siteKey(normalized))) siteMap.set(siteKey(normalized), siteOrigin(normalized));
     }
@@ -230,6 +258,57 @@ export class ScanService {
     }
   }
 
+  private async compareHours(scanId: string, options: ScanOptions): Promise<void> {
+    const candidates = this.db.listCandidates(scanId);
+    const sites = new Map<string, string>();
+    for (const candidate of candidates) {
+      try {
+        const key = siteKey(candidate.site);
+        if (!sites.has(key)) sites.set(key, siteOrigin(candidate.site));
+      } catch {
+        // A candidate whose site cannot be normalized has nothing to compare.
+      }
+    }
+    if (!sites.size) return;
+    // Fail fast rather than driving a browser over every site only to be rejected by Places.
+    if (!process.env.GOOGLE_MAPS_API_KEY) {
+      this.db.appendWarning(scanId, 'hours comparison: GOOGLE_MAPS_API_KEY is required for opening-hours comparison');
+      return;
+    }
+
+    const inspector = new HoursInspector({
+      perHostConcurrency: options.perHostConcurrency,
+      hostDelayMs: options.hostDelayMs,
+      timeoutMs: options.timeoutMs,
+    });
+    try {
+      for (const [key, site] of sites) {
+        if (this.db.getScan(scanId)?.cancelRequested) return;
+        // A resumed scan must never pay for the same Places lookup twice.
+        if (this.db.hasHours(scanId, key)) continue;
+        try {
+          const record = await auditSiteHours({
+            site,
+            siteKey: key,
+            pages: selectHoursPages(site, candidates, options.hoursPageLimit),
+            hints: collectPlaceHints(candidates, key),
+            toleranceMinutes: options.hoursToleranceMinutes,
+            requireVerifiedPlace: options.hoursRequireVerifiedPlace,
+          }, inspector);
+          this.db.upsertHours(scanId, record);
+          if (record.matchConfidence === 'unverified') {
+            this.db.appendWarning(scanId, `hours ${key}: compared against an unverified Google listing`);
+          }
+          this.emit(scanId, `Hours ${key}: ${record.status}`);
+        } catch (error) {
+          this.warnAdapter(scanId, 'hours', site, error);
+        }
+      }
+    } finally {
+      await inspector.close();
+    }
+  }
+
   private async inspectFindings(scanId: string): Promise<void> {
     const candidates = this.db.listCandidates(scanId).filter((candidate) => candidate.result && isActionable(candidate.result.classification));
     for (const candidate of candidates) {
@@ -273,9 +352,31 @@ export class ScanService {
       processed: scan.processed,
       findings: scan.findings,
       backlinkCount: this.db.backlinkCount(scanId),
+      hoursChecked: this.db.hoursCount(scanId),
+      hoursMismatches: this.db.hoursMismatchCount(scanId),
       message,
     } satisfies ScanProgressEvent);
   }
+}
+
+/** Pulls operator-supplied place hints out of the discovery evidence for one site. */
+function collectPlaceHints(candidates: readonly CandidateRecord[], key: string): PlaceHints {
+  const hints: PlaceHints = {};
+  for (const candidate of candidates) {
+    let candidateKey: string;
+    try {
+      candidateKey = siteKey(candidate.site);
+    } catch {
+      continue;
+    }
+    if (candidateKey !== key) continue;
+    for (const source of candidate.sources) {
+      hints.name ??= source.restaurantName;
+      hints.address ??= source.restaurantAddress;
+      hints.placeId ??= source.placeId;
+    }
+  }
+  return hints;
 }
 
 function makeScanId(): string {

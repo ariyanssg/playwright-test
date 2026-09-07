@@ -18,6 +18,7 @@ export type ScanStatus =
   | 'queued'
   | 'discovering'
   | 'scanning'
+  | 'comparing_hours'
   | 'reporting'
   | 'completed'
   | 'cancelled'
@@ -39,6 +40,9 @@ export interface DiscoveryEvidence {
   backlinkSourceDomain?: string;
   anchor?: string | null;
   dofollow?: boolean;
+  restaurantName?: string;
+  restaurantAddress?: string;
+  placeId?: string;
 }
 
 export interface BacklinkRecord {
@@ -127,6 +131,10 @@ export interface ScanOptions {
   gscDays: number;
   backlinkLimit: number;
   failOn: 'hard' | 'soft' | 'none';
+  checkHours: boolean;
+  hoursToleranceMinutes: number;
+  hoursPageLimit: number;
+  hoursRequireVerifiedPlace: boolean;
 }
 
 export interface StoredScan {
@@ -155,6 +163,7 @@ export interface ScanSummary {
   counts: Record<Classification, number>;
   sourceCounts: Partial<Record<DiscoverySource, number>>;
   backlinkCount: number;
+  hoursCounts: Partial<Record<HoursComparisonStatus, number>>;
   artifacts: string[];
 }
 
@@ -165,5 +174,118 @@ export interface ScanProgressEvent {
   processed: number;
   findings: number;
   backlinkCount: number;
+  hoursChecked: number;
+  hoursMismatches: number;
   message: string;
+}
+
+/* ------------------------------------------------------------------ *
+ * Opening-hours comparison
+ * ------------------------------------------------------------------ */
+
+export type DayIndex = 0 | 1 | 2 | 3 | 4 | 5 | 6;
+
+/**
+ * A half-open [start, end) span in minutes from Sunday 00:00 **local wall clock
+ * at the restaurant**. `end` may exceed a week boundary, which means the span
+ * wraps past Saturday midnight into Sunday.
+ */
+export interface OpenInterval {
+  start: number;
+  end: number;
+}
+
+export interface WeeklyHours {
+  /** Sorted, merged, non-overlapping. */
+  intervals: OpenInterval[];
+  /** Days the source made an explicit statement about, including "Closed". */
+  statedDays: DayIndex[];
+  open24x7: boolean;
+}
+
+export const HOURS_METHODS = ['jsonld', 'microdata', 'text', 'none'] as const;
+export type HoursMethod = (typeof HOURS_METHODS)[number];
+
+export const HOURS_DAY_VERDICTS = [
+  'match',
+  'both_closed',
+  'minor_difference',
+  'mismatch',
+  'closed_on_google',
+  'closed_on_website',
+  'missing_website',
+  'missing_google',
+  'unknown',
+] as const;
+export type DayVerdict = (typeof HOURS_DAY_VERDICTS)[number];
+
+export const HOURS_COMPARISON_STATUSES = [
+  'aligned',
+  'minor_differences',
+  'mismatch',
+  'partial',
+  'no_website_hours',
+  'no_google_hours',
+  'business_closed',
+  'unmatched',
+  'not_checked',
+] as const;
+export type HoursComparisonStatus = (typeof HOURS_COMPARISON_STATUSES)[number];
+
+export const PLACE_MATCH_CONFIDENCES = ['verified', 'place_id_supplied', 'unverified', 'ambiguous', 'none'] as const;
+export type PlaceMatchConfidence = (typeof PLACE_MATCH_CONFIDENCES)[number];
+
+export interface PlacePoint {
+  day: number;
+  hour: number;
+  minute: number;
+}
+
+export interface PlacePeriod {
+  open: PlacePoint;
+  close?: PlacePoint;
+}
+
+export interface PlaceOpeningHours {
+  periods: PlacePeriod[];
+  weekdayDescriptions: string[];
+}
+
+export interface PlaceMatch {
+  placeId: string;
+  displayName: string;
+  formattedAddress: string;
+  websiteUri: string | null;
+  utcOffsetMinutes: number | null;
+  businessStatus: string | null;
+  regularOpeningHours: PlaceOpeningHours | null;
+}
+
+export interface HoursDayDiff {
+  day: DayIndex;
+  verdict: DayVerdict;
+  googleText: string;
+  websiteText: string;
+  deltaMinutes: number | null;
+  notes: string[];
+}
+
+export interface HoursComparisonRecord {
+  site: string;
+  siteKey: string;
+  status: HoursComparisonStatus;
+  matchConfidence: PlaceMatchConfidence;
+  placeId: string | null;
+  placeName: string | null;
+  placeAddress: string | null;
+  placeWebsite: string | null;
+  businessStatus: string | null;
+  utcOffsetMinutes: number | null;
+  websiteMethod: HoursMethod;
+  websiteHoursUrl: string | null;
+  pagesInspected: number;
+  days: HoursDayDiff[];
+  maxDeltaMinutes: number | null;
+  notes: string[];
+  checkedAt: string;
 }

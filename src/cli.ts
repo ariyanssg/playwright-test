@@ -46,6 +46,10 @@ async function scan(args: string[]): Promise<void> {
       'gsc-days': { type: 'string', default: '90' },
       'backlink-limit': { type: 'string', default: '100000' },
       'fail-on': { type: 'string', default: 'hard' },
+      'check-hours': { type: 'boolean', default: false },
+      'hours-tolerance': { type: 'string', default: '15' },
+      'hours-pages': { type: 'string', default: '5' },
+      'hours-require-verified-place': { type: 'boolean', default: false },
       help: { type: 'boolean', short: 'h' },
     },
     allowPositionals: false,
@@ -68,6 +72,10 @@ async function scan(args: string[]): Promise<void> {
       gscDays: numberOption(values['gsc-days'], 'gsc-days'),
       backlinkLimit: numberOption(values['backlink-limit'], 'backlink-limit'),
       failOn: parseFailOn(values['fail-on']),
+      checkHours: values['check-hours'],
+      hoursToleranceMinutes: numberOption(values['hours-tolerance'], 'hours-tolerance'),
+      hoursPageLimit: numberOption(values['hours-pages'], 'hours-pages'),
+      hoursRequireVerifiedPlace: values['hours-require-verified-place'],
     };
     const created = service.createScan(options);
     console.log(`Scan ${created.id}`);
@@ -198,5 +206,11 @@ Scan options:
   --gsc-days <n>        Search Analytics window (default: 90)
   --backlink-limit <n>  DataForSEO backlink row cap per site (default: 100000)
   --fail-on <level>     hard, soft, or none (default: hard)
+
+Opening hours comparison (requires GOOGLE_MAPS_API_KEY; Places API is billed per request):
+  --check-hours                   Compare Google and website opening hours per site
+  --hours-tolerance <minutes>     Differences at or under this are minor (default: 15)
+  --hours-pages <n>               Pages inspected per site for hours (default: 5)
+  --hours-require-verified-place  Skip sites whose Google listing cannot be verified
 `);
 }

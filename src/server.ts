@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { appDataDir } from './config.js';
 import { ScanService } from './service.js';
-import type { ScanOptions } from './types.js';
+import type { ScanOptions, ScanProgressEvent } from './types.js';
 
 export interface ServerHandle {
   port: number;
@@ -52,6 +52,7 @@ async function routeRequest(service: ScanService, port: number, request: Incomin
     return json(response, 200, {
       searchApi: Boolean(process.env.SEARCHAPI_API_KEY),
       dataForSeo: Boolean(process.env.DATAFORSEO_LOGIN && process.env.DATAFORSEO_PASSWORD),
+      googleMaps: Boolean(process.env.GOOGLE_MAPS_API_KEY),
     });
   }
   if (method === 'GET' && url.pathname === '/api/scans') {
@@ -131,7 +132,17 @@ function streamEvents(service: ScanService, scanId: string, request: IncomingMes
     connection: 'keep-alive',
   });
   const send = (event: unknown) => response.write(`data: ${JSON.stringify(event)}\n\n`);
-  send({ scanId, status: scan.status, total: scan.total, processed: scan.processed, findings: scan.findings, backlinkCount: service.db.backlinkCount(scanId), message: 'Connected' });
+  send({
+    scanId,
+    status: scan.status,
+    total: scan.total,
+    processed: scan.processed,
+    findings: scan.findings,
+    backlinkCount: service.db.backlinkCount(scanId),
+    hoursChecked: service.db.hoursCount(scanId),
+    hoursMismatches: service.db.hoursMismatchCount(scanId),
+    message: 'Connected',
+  } satisfies ScanProgressEvent);
   const unsubscribe = service.onProgress(scanId, send);
   const keepalive = setInterval(() => response.write(': keepalive\n\n'), 15_000);
   const cleanup = () => {
@@ -145,7 +156,7 @@ function streamEvents(service: ScanService, scanId: string, request: IncomingMes
 async function serveArtifact(service: ScanService, scanId: string, fileName: string, response: ServerResponse): Promise<void> {
   const scan = service.getScan(scanId);
   if (!scan) return json(response, 404, { error: 'Unknown scan' });
-  const allowed = new Set(['report.xlsx', 'findings.csv', 'all-urls.csv', 'backlinks.csv', 'run.json']);
+  const allowed = new Set(['report.xlsx', 'findings.csv', 'all-urls.csv', 'backlinks.csv', 'hours.csv', 'run.json']);
   if (!allowed.has(fileName)) return json(response, 404, { error: 'Unknown artifact' });
   const filePath = join(scan.outputDir, fileName);
   const info = await stat(filePath);

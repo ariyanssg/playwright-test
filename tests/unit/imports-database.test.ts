@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 import ExcelJS from 'exceljs';
 import { ScanDatabase } from '../../src/database.js';
-import { importUrlsFromFile } from '../../src/imports.js';
+import { importRowsFromFile, importUrlsFromFile } from '../../src/imports.js';
 import { defaultScanOptions } from '../../src/config.js';
 
 test('a restaurant site scan defaults to every available discovery source', () => {
@@ -30,6 +30,64 @@ test('imports URL columns from TXT, CSV, and XLSX', async () => {
   assert.deepEqual(await importUrlsFromFile(txt), ['https://example.com/a', 'https://example.com/b']);
   assert.deepEqual(await importUrlsFromFile(csv), ['https://example.com/menu', 'https://example.com/old']);
   assert.deepEqual(await importUrlsFromFile(xlsx), ['https://example.com/from-xlsx']);
+});
+
+test('optional name, address, and place id columns become place hints', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'seo404-hints-'));
+  const csv = join(directory, 'restaurants.csv');
+  const xlsx = join(directory, 'restaurants.xlsx');
+  const bare = join(directory, 'bare.csv');
+  await writeFile(csv, [
+    'Restaurant Name,Website,Full Address,Place ID',
+    'Blue Fin Sushi,https://bluefin.example,"12 Ocean Ave, San Francisco",places/blue-fin',
+    'Taco Palace,tacopalace.example,,',
+  ].join('\n'));
+  await writeFile(bare, 'https://example.com/a\nhttps://example.com/b\n');
+
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet('Restaurants');
+  sheet.addRow(['URL', 'Business', 'Address']);
+  sheet.addRow(['https://bluefin.example', 'Blue Fin Sushi', '12 Ocean Ave']);
+  await workbook.xlsx.writeFile(xlsx);
+
+  assert.deepEqual(await importRowsFromFile(csv), [
+    { url: 'https://bluefin.example/', name: 'Blue Fin Sushi', address: '12 Ocean Ave, San Francisco', placeId: 'places/blue-fin' },
+    { url: 'https://tacopalace.example/', name: 'Taco Palace' },
+  ]);
+  assert.deepEqual(await importRowsFromFile(xlsx), [
+    { url: 'https://bluefin.example/', name: 'Blue Fin Sushi', address: '12 Ocean Ave' },
+  ]);
+  // Without a recognizable URL header the file stays a bare list of URLs.
+  assert.deepEqual(await importRowsFromFile(bare), [{ url: 'https://example.com/a' }, { url: 'https://example.com/b' }]);
+  assert.deepEqual(await importUrlsFromFile(csv), ['https://bluefin.example/', 'https://tacopalace.example/']);
+});
+
+test('hours comparisons are stored per site and survive a resume', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'seo404-hours-db-'));
+  const db = new ScanDatabase(join(directory, 'scan.sqlite'));
+  try {
+    db.createScan('scan-hours', defaultScanOptions(), join(directory, 'output'));
+    const record = {
+      site: 'https://bluefin.example', siteKey: 'bluefin.example', status: 'mismatch' as const,
+      matchConfidence: 'verified' as const, placeId: 'places/blue-fin', placeName: 'Blue Fin Sushi',
+      placeAddress: '12 Ocean Ave', placeWebsite: 'https://bluefin.example', businessStatus: 'OPERATIONAL',
+      utcOffsetMinutes: -480, websiteMethod: 'jsonld' as const, websiteHoursUrl: 'https://bluefin.example/hours',
+      pagesInspected: 4, days: [], maxDeltaMinutes: 45, notes: [], checkedAt: new Date().toISOString(),
+    };
+    db.upsertHours('scan-hours', record);
+    db.upsertHours('scan-hours', { ...record, status: 'aligned', maxDeltaMinutes: 0 });
+    assert.equal(db.hoursCount('scan-hours'), 1, 'one row per site, replaced rather than duplicated');
+    assert.equal(db.listHours('scan-hours')[0]?.status, 'aligned');
+    assert.equal(db.hoursMismatchCount('scan-hours'), 0);
+    assert.deepEqual(db.hoursStatusCounts('scan-hours'), { aligned: 1 });
+    assert.equal(db.hasHours('scan-hours', 'bluefin.example'), true);
+    assert.equal(db.hasHours('scan-hours', 'other.example'), false);
+
+    db.resetForResume('scan-hours');
+    assert.equal(db.hoursCount('scan-hours'), 1, 'a resume must not discard paid-for lookups');
+  } finally {
+    db.close();
+  }
 });
 
 test('SQLite persistence deduplicates candidates while retaining discovery evidence', async () => {

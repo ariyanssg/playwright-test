@@ -35,6 +35,10 @@ export function defaultScanOptions(): ScanOptions {
     gscDays: 90,
     backlinkLimit: 100_000,
     failOn: 'hard',
+    checkHours: false,
+    hoursToleranceMinutes: 15,
+    hoursPageLimit: 5,
+    hoursRequireVerifiedPlace: false,
   };
 }
 
@@ -51,6 +55,8 @@ export function mergeScanOptions(input: Partial<ScanOptions>): ScanOptions {
   merged.timeoutMs = positiveInteger(merged.timeoutMs, 'timeout');
   merged.gscDays = positiveInteger(merged.gscDays, 'GSC days');
   merged.backlinkLimit = positiveInteger(merged.backlinkLimit, 'backlink limit');
+  merged.hoursToleranceMinutes = nonNegativeInteger(merged.hoursToleranceMinutes, 'hours tolerance');
+  merged.hoursPageLimit = positiveInteger(merged.hoursPageLimit, 'hours page limit');
   return merged;
 }
 

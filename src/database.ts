@@ -1,7 +1,7 @@
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { CLASSIFICATIONS, type BacklinkRecord, type Candidate, type CandidateRecord, type Classification, type ScanOptions, type ScanResult, type StoredScan } from './types.js';
+import { CLASSIFICATIONS, HOURS_COMPARISON_STATUSES, type BacklinkRecord, type Candidate, type CandidateRecord, type Classification, type HoursComparisonRecord, type HoursComparisonStatus, type PlaceMatchConfidence, type ScanOptions, type ScanResult, type StoredScan } from './types.js';
 
 interface ScanRow {
   id: string;
@@ -49,6 +49,16 @@ interface BacklinkRow {
   last_seen: string | null;
   links_count: number;
   provider: 'dataforseo';
+}
+
+interface HoursRow {
+  site: string;
+  site_key: string;
+  status: HoursComparisonStatus;
+  match_confidence: PlaceMatchConfidence;
+  place_id: string | null;
+  result_json: string;
+  checked_at: string;
 }
 
 export class ScanDatabase {
@@ -111,6 +121,18 @@ export class ScanDatabase {
         PRIMARY KEY (scan_id, target_url, source_url, anchor_key)
       );
       CREATE INDEX IF NOT EXISTS backlinks_target_idx ON backlinks(scan_id, target_url);
+      CREATE TABLE IF NOT EXISTS restaurant_hours (
+        scan_id TEXT NOT NULL REFERENCES scans(id) ON DELETE CASCADE,
+        site_key TEXT NOT NULL,
+        site TEXT NOT NULL,
+        status TEXT NOT NULL,
+        match_confidence TEXT NOT NULL,
+        place_id TEXT,
+        result_json TEXT NOT NULL,
+        checked_at TEXT NOT NULL,
+        PRIMARY KEY (scan_id, site_key)
+      );
+      CREATE INDEX IF NOT EXISTS restaurant_hours_status_idx ON restaurant_hours(scan_id, status);
     `);
   }
 
@@ -206,6 +228,50 @@ export class ScanDatabase {
     return row.count;
   }
 
+  upsertHours(scanId: string, record: HoursComparisonRecord): void {
+    this.db.prepare(`INSERT OR REPLACE INTO restaurant_hours (
+      scan_id, site_key, site, status, match_confidence, place_id, result_json, checked_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(
+      scanId, record.siteKey, record.site, record.status, record.matchConfidence,
+      record.placeId, JSON.stringify(record), record.checkedAt,
+    );
+  }
+
+  listHours(scanId: string): HoursComparisonRecord[] {
+    const rows = this.db.prepare('SELECT * FROM restaurant_hours WHERE scan_id = ? ORDER BY site_key')
+      .all(scanId) as unknown as HoursRow[];
+    return rows.map((row) => JSON.parse(row.result_json) as HoursComparisonRecord);
+  }
+
+  hasHours(scanId: string, key: string): boolean {
+    const row = this.db.prepare('SELECT 1 AS present FROM restaurant_hours WHERE scan_id = ? AND site_key = ?')
+      .get(scanId, key) as { present: number } | undefined;
+    return Boolean(row);
+  }
+
+  hoursCount(scanId: string): number {
+    const row = this.db.prepare('SELECT COUNT(*) AS count FROM restaurant_hours WHERE scan_id = ?').get(scanId) as { count: number };
+    return row.count;
+  }
+
+  hoursMismatchCount(scanId: string): number {
+    const row = this.db.prepare("SELECT COUNT(*) AS count FROM restaurant_hours WHERE scan_id = ? AND status = 'mismatch'")
+      .get(scanId) as { count: number };
+    return row.count;
+  }
+
+  hoursStatusCounts(scanId: string): Partial<Record<HoursComparisonStatus, number>> {
+    const counts: Partial<Record<HoursComparisonStatus, number>> = {};
+    const rows = this.db.prepare('SELECT status, COUNT(*) AS count FROM restaurant_hours WHERE scan_id = ? GROUP BY status')
+      .all(scanId) as unknown as Array<{ status: string; count: number }>;
+    for (const row of rows) {
+      if (HOURS_COMPARISON_STATUSES.includes(row.status as HoursComparisonStatus)) {
+        counts[row.status as HoursComparisonStatus] = row.count;
+      }
+    }
+    return counts;
+  }
+
   markCandidateRunning(scanId: string, url: string): void {
     this.db.prepare("UPDATE candidates SET status = 'running' WHERE scan_id = ? AND normalized_url = ?").run(scanId, url);
   }
@@ -226,6 +292,7 @@ export class ScanDatabase {
   }
 
   resetForResume(scanId: string): void {
+    // restaurant_hours rows are deliberately kept: a resume must never re-bill the Places API.
     this.db.prepare("UPDATE candidates SET status = 'pending' WHERE scan_id = ? AND status = 'running'").run(scanId);
     this.updateScan(scanId, { status: 'queued', cancelRequested: false, error: null, completedAt: null });
     this.reconcileCounts(scanId);

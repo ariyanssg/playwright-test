@@ -74,6 +74,10 @@ async function startScan(event) {
       inspectGoogle: $('#inspect-google').checked,
       gscDays: numberValue('#gsc-days'),
       backlinkLimit: numberValue('#backlink-limit'),
+      checkHours: $('#check-hours').checked,
+      hoursToleranceMinutes: numberValue('#hours-tolerance'),
+      hoursPageLimit: numberValue('#hours-pages'),
+      hoursRequireVerifiedPlace: false,
       failOn: 'hard',
     };
     const response = await fetch('/api/scans', {
@@ -140,9 +144,27 @@ async function loadProviderStatus() {
     const status = await api('/api/providers/status');
     setSourceTag('searchapi', status.searchApi ? 'Ready' : 'Credentials', status.searchApi);
     setSourceTag('backlinks', status.dataForSeo ? 'Ready' : 'Credentials', status.dataForSeo);
+    setHoursAvailability(status.googleMaps);
   } catch {
     setSourceTag('searchapi', 'Unavailable', false);
     setSourceTag('backlinks', 'Unavailable', false);
+    setHoursAvailability(false);
+  }
+}
+
+function setHoursAvailability(available) {
+  const toggle = $('#check-hours');
+  if (!toggle) return;
+  toggle.disabled = !available;
+  if (!available) toggle.checked = false;
+  toggle.closest('label').title = available
+    ? 'Places API is billed per request'
+    : 'Set GOOGLE_MAPS_API_KEY before starting the dashboard to enable this';
+  const note = $('#check-hours-note');
+  if (note) {
+    note.textContent = available
+      ? 'Google Places key detected · billed per request'
+      : 'Requires GOOGLE_MAPS_API_KEY · Places API is billed per request';
   }
 }
 
@@ -211,12 +233,13 @@ async function refreshActive() {
   if (!state.activeId) return;
   const summary = await api(`/api/scans/${encodeURIComponent(state.activeId)}`);
   const scan = summary.scan;
-  renderProgress({ ...scan, scanId: scan.id, backlinkCount: summary.backlinkCount, message: state.lastMessage || (scan.error ? `Failed: ${scan.error}` : progressCopy(scan.status)) });
-  const running = ['queued', 'discovering', 'scanning', 'reporting'].includes(scan.status);
+  const hoursMismatches = summary.hoursCounts?.mismatch || 0;
+  renderProgress({ ...scan, scanId: scan.id, backlinkCount: summary.backlinkCount, hoursMismatches, message: state.lastMessage || (scan.error ? `Failed: ${scan.error}` : progressCopy(scan.status)) });
+  const running = ['queued', 'discovering', 'scanning', 'comparing_hours', 'reporting'].includes(scan.status);
   $('#cancel-run').classList.toggle('hidden', !running);
   $('#resume-run').classList.toggle('hidden', !['cancelled', 'failed'].includes(scan.status));
 
-  const artifactOrder = ['report.xlsx', 'findings.csv', 'all-urls.csv', 'backlinks.csv', 'run.json'];
+  const artifactOrder = ['report.xlsx', 'findings.csv', 'all-urls.csv', 'backlinks.csv', 'hours.csv', 'run.json'];
   const artifacts = [...summary.artifacts].sort((left, right) => artifactOrder.indexOf(left) - artifactOrder.indexOf(right));
   $('#downloads').innerHTML = artifacts.map((file) => {
     const primary = file === 'report.xlsx' ? ' primary-download' : '';
@@ -236,6 +259,7 @@ function renderProgress(progress) {
   $('#metric-processed').textContent = number(progress.processed);
   $('#metric-findings').textContent = number(progress.findings);
   $('#metric-backlinks').textContent = number(progress.backlinkCount);
+  $('#metric-hours').textContent = number(progress.hoursMismatches || 0);
   $('#progress-message').textContent = readableProgressMessage(progress.message || progress.status);
   const percentage = progress.total ? Math.min(100, Math.round(progress.processed / progress.total * 100)) : (progress.status === 'completed' ? 100 : 0);
   $('#progress-percent').textContent = `${percentage}%`;
@@ -246,9 +270,9 @@ function renderProgress(progress) {
 }
 
 function updateStages(status) {
-  const order = ['discovering', 'scanning', 'reporting'];
+  const order = ['discovering', 'scanning', 'comparing_hours', 'reporting'];
   const terminal = ['completed', 'cancelled', 'failed'].includes(status);
-  const currentIndex = terminal ? (status === 'completed' ? 3 : order.indexOf('scanning')) : order.indexOf(status);
+  const currentIndex = terminal ? (status === 'completed' ? order.length : order.indexOf('scanning')) : order.indexOf(status);
   for (const element of $$('.stage-track [data-stage]')) {
     const index = order.indexOf(element.dataset.stage);
     element.classList.toggle('complete', currentIndex > index || status === 'completed');
@@ -378,7 +402,7 @@ async function api(url, options) {
 }
 
 function progressCopy(status) {
-  return ({ queued: 'Queued and waiting for a worker', discovering: 'Collecting and deduplicating candidate URLs', scanning: 'Rendering pages and evaluating live outcomes', reporting: 'Building audit exports', completed: 'Audit complete', cancelled: 'Audit cancelled; partial reports are available', failed: 'Audit failed' })[status] || status;
+  return ({ queued: 'Queued and waiting for a worker', discovering: 'Collecting and deduplicating candidate URLs', scanning: 'Rendering pages and evaluating live outcomes', comparing_hours: 'Comparing Google and website opening hours', reporting: 'Building audit exports', completed: 'Audit complete', cancelled: 'Audit cancelled; partial reports are available', failed: 'Audit failed' })[status] || status;
 }
 
 function readableProgressMessage(message) {
@@ -386,7 +410,7 @@ function readableProgressMessage(message) {
   return match ? `${classificationLabel(match[1])} · ${match[2]}` : String(message);
 }
 
-function statusLabel(status) { return ({ queued: 'Queued', discovering: 'Discovering', scanning: 'Verifying', reporting: 'Reporting', completed: 'Completed', cancelled: 'Cancelled', failed: 'Failed' })[status] || status; }
+function statusLabel(status) { return ({ queued: 'Queued', discovering: 'Discovering', scanning: 'Verifying', comparing_hours: 'Comparing hours', reporting: 'Reporting', completed: 'Completed', cancelled: 'Cancelled', failed: 'Failed' })[status] || status; }
 function classificationLabel(value) { return ({ hard_404: 'Hard 404', gone_410: 'Gone 410', soft_404_suspected: 'Soft 404 suspected', redirected: 'Redirected', ok: 'Healthy', server_error: 'Server error', blocked: 'Blocked', timeout: 'Timed out', network_error: 'Network error' })[value] || value.replaceAll('_', ' '); }
 function sourceLabel(value) { return ({ import: 'Import', sitemap: 'Sitemap', crawl: 'Crawl', searchapi: 'Google', gsc: 'GSC', backlinks: 'Backlink' })[value] || value; }
 function lines(value) { return value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean); }

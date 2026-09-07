@@ -78,6 +78,17 @@ CLI exit codes:
 
 Every valid pasted, `--url`, or file-imported URL is checked. Imported URLs have no artificial count limit.
 
+CSV and XLSX files may carry optional identity columns alongside the URL column, used only by the opening-hours comparison:
+
+| Column header | Accepted aliases |
+| --- | --- |
+| `url` | `urls`, `website`, `domain`, `site`, `page`, `link` |
+| `name` | `restaurant`, `restaurant name`, `business`, `business name`, `title` |
+| `address` | `street address`, `location`, `full address`, `formatted address` |
+| `place_id` | `placeid`, `place id`, `google place id` |
+
+Identity columns are read only when a recognized URL header is present; a header-less file is still treated as a bare list of URLs.
+
 ### Sitemaps
 
 Reads sitemap declarations from `robots.txt`, tries `/sitemap.xml`, follows nested indexes, and decompresses gzip sitemap files. Only same-site page URLs are added.
@@ -121,14 +132,48 @@ npm run cli -- scan --site https://example.com --discover all
 
 The adapter requests live and lost backlinks in `as_is` mode, follows DataForSEO pagination tokens, records every referring URL, and adds every same-site backlink destination to the Playwright verification queue. Use `--backlink-limit` to control the provider-billed maximum. Backlink coverage describes DataForSEO's index, not a guaranteed inventory of the entire web.
 
+## Opening hours comparison
+
+`--check-hours` adds a stage that fetches each restaurant's Google opening hours and diffs them against the hours published on its own website.
+
+```bash
+GOOGLE_MAPS_API_KEY=... npm run cli -- scan \
+  --input restaurants.csv \
+  --discover import \
+  --check-hours \
+  --hours-tolerance 15
+```
+
+**Setup.** Enable **Places API (New)** in Google Cloud and export `GOOGLE_MAPS_API_KEY`. Nothing in this project loads a `.env` file, so the variable must be exported in the shell. Text Search and Place Details are billed per request, and asking for opening hours puts the call in a higher-priced field tier - the stage is off by default for that reason, and issues at most one lookup per unique site.
+
+**Options.**
+
+| Flag | Default | Effect |
+| --- | --- | --- |
+| `--check-hours` | off | Enables the stage |
+| `--hours-tolerance <minutes>` | 15 | Differences at or under this are reported as minor rather than as mismatches |
+| `--hours-pages <n>` | 5 | Pages read per site when looking for hours |
+| `--hours-require-verified-place` | off | Skip any site whose Google listing cannot be verified |
+
+**Matching a restaurant to its listing.** A `place_id` column wins outright. Otherwise the restaurant's name and address come from the input file or from the site's own JSON-LD, a Text Search is issued, and a returned listing counts as **verified** only when its `websiteUri` host matches the site's. Several listings pointing at one domain are reported as **ambiguous** rather than guessed at, and a name-only match is reported as **unverified** and flagged in the workbook, the CSV, the notes, and the run warnings.
+
+**Reading hours from the website.** Three layers, in confidence order: schema.org JSON-LD (`openingHoursSpecification` and the legacy `openingHours` shorthand), microdata, then visible page text. The highest-confidence layer that produced anything wins outright - layers are never merged, because combining a partial specification with text guesses would invent hours that appear in neither source. A day is only compared when the source actually says something about it, so a site listing Monday to Friday is reported as `partial`, never as closed at the weekend.
+
+**Comparing.** Both sides are local wall-clock times at the restaurant, so no timezone conversion happens; `utcOffsetMinutes` is recorded as context only. The comparison handles closes after midnight, split lunch and dinner shifts, closed days, and around-the-clock listings. Tolerance applies to each boundary independently.
+
+**Out of scope in this version:** holiday and special hours, name/address/phone consistency, more than one location per domain (supply `place_id` per row), hours rendered inside a third-party booking widget, and non-English visible text (JSON-LD still works in any language).
+
+A mismatch means the two published sources disagree - Google's data is crowd-edited and frequently stale, so it does not by itself mean the website is wrong.
+
 ## Reports
 
 Each run produces:
 
-- `report.xlsx` with `Summary`, `Broken & Soft 404`, `All URLs`, `Backlinks`, and `Sources & Run Info` sheets
+- `report.xlsx` with `Summary`, `Broken & Soft 404`, `All URLs`, `Backlinks`, and `Sources & Run Info` sheets, plus `Hours Comparison` when `--check-hours` is used
 - `findings.csv` containing hard 404, 410, and suspected soft 404 rows
 - `all-urls.csv` containing every completed check
 - `backlinks.csv` containing referring URLs, anchors, provider metrics, and the verified live outcome of every on-site backlink target
+- `hours.csv`, written only when `--check-hours` is used, with one row per restaurant per day
 - `run.json` containing the complete machine-readable job, discovery evidence, results, warnings, and coverage notes
 
 The workbook uses typed dates/numbers, filters, frozen headings, URL hyperlinks, status colors, and formula-driven summary counts. Cancelled runs still export a report marked `cancelled`; resuming replaces it with the completed report.
@@ -155,4 +200,4 @@ npm run build
 npm audit --audit-level=moderate
 ```
 
-The test suite uses local fixture sites for 404, 410, server- and client-rendered soft 404, redirect, robots, nested/gzip sitemap, SearchApi, cancellation/resume, report reconciliation, and dashboard download workflows. It does not scrape Google result pages directly.
+The test suite uses local fixture sites for 404, 410, server- and client-rendered soft 404, redirect, robots, nested/gzip sitemap, SearchApi, opening hours in JSON-LD, microdata and plain text, cancellation/resume, report reconciliation, and dashboard download workflows. External APIs, including Google Places, are exercised against local mock servers through their endpoint overrides. It does not scrape Google result pages or Google Maps directly.
