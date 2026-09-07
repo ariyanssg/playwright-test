@@ -1,5 +1,6 @@
 /** One transport boundary shared by every workspace feature. */
 export async function request(url, options = {}) {
+  if (globalThis.SIGNAL404_HOSTED) return (await import('./hosted.js')).hostedRequest(url, options);
   let response;
   try { response = await fetch(url, options); } catch (error) {
     if (error.name === 'AbortError') throw error;

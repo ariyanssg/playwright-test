@@ -115,7 +115,7 @@ export function createAudit(onProgress, onFinished) {
   function connect() {
     if (!state.summary || !isRunning(state.summary.scan.status)) return;
     const generation = state.generation;
-    const source = new EventSource(`${scanPath(state.id)}/events`); state.source = source;
+    const source = globalThis.SIGNAL404_HOSTED ? { close() {} } : new EventSource(`${scanPath(state.id)}/events`); state.source = source;
     source.onopen = () => { if (state.generation === generation) connection('Live updates', true); };
     source.onmessage = (event) => {
       if (state.generation !== generation) return;

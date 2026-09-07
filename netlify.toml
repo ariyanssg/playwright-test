@@ -1,11 +1,15 @@
-# Publishes the dashboard assets. The scanner still needs a persistent Node
-# backend; Netlify does not start `npm run serve` after the build.
+# Browser-owned audit storage with stateless Netlify workers.
 [build]
-  command = "npm run build"
+  command = "npm run build:netlify"
   publish = "dist/public"
 
 [build.environment]
   NODE_VERSION = "24"
+
+[functions]
+  directory = "netlify/functions"
+  node_bundler = "esbuild"
+  external_node_modules = ["playwright", "@sparticuz/chromium"]
 
 # Keep API keys in Netlify environment variables, never in this file or the
 # published directory. Import the local .env with `netlify env:import .env`.

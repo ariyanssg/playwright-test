@@ -22,7 +22,7 @@ export interface HoursAuditInput {
  */
 export async function auditSiteHours(
   input: HoursAuditInput,
-  inspector: HoursInspector,
+  inspector: Pick<HoursInspector, 'inspect'>,
   lookup?: PlaceLookup,
 ): Promise<HoursComparisonRecord> {
   const extraction = await inspector.inspect(input.pages);

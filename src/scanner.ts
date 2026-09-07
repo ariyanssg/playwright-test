@@ -152,7 +152,7 @@ export class BrowserScanner {
   }
 }
 
-async function renderPage(page: Page, url: string, timeoutMs: number): Promise<RenderedPage> {
+export async function renderPage(page: Page, url: string, timeoutMs: number): Promise<RenderedPage> {
   const started = performance.now();
   try {
     const response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: timeoutMs });

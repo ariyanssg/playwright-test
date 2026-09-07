@@ -1,8 +1,18 @@
 import { request, createScan } from './api.js';
 import { $, $$, lines, number, notify } from './ui.js';
-const presets = { google: ['google'], all: ['import', 'sitemap', 'crawl', 'google', 'gsc', 'backlinks'], local: ['import', 'sitemap', 'crawl'], import: ['import'] };
+const presets = globalThis.SIGNAL404_HOSTED ? { google: ['google'], all: ['import', 'google'], local: ['import'], import: ['import'] } : { google: ['google'], all: ['import', 'sitemap', 'crawl', 'google', 'gsc', 'backlinks'], local: ['import', 'sitemap', 'crawl'], import: ['import'] };
 export function initSetup(onCreated) {
   const form = $('#scan-form'), fileInput = $('#files'), button = $('#start-button');
+  if (globalThis.SIGNAL404_HOSTED) {
+    $$('[name="discovery"]').filter((input) => !['google', 'import'].includes(input.value)).forEach((input) => { input.checked = false; input.disabled = true; input.closest('.source-card').classList.add('hidden'); });
+    $('[data-preset="local"]').classList.add('hidden');
+    $('#google-provider').value = 'searchapi'; $('#google-provider option[value="browser"]').disabled = true;
+    $('#google-max-pages').max = '100';
+    for (const id of ['concurrency', 'per-host', 'host-delay', 'crawl-limit', 'timeout', 'gsc-days', 'backlink-limit']) {
+      const input = $(`#${id}`); if (!input) continue; input.closest('label').classList.add('hidden');
+      if (id === 'concurrency' || id === 'per-host') input.defaultValue = input.value = '1';
+    }
+  }
   let submitting = false;
   function update() {
     const sites = lines($('#sites').value).length, urls = lines($('#urls').value).length, files = [...fileInput.files];

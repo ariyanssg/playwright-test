@@ -5,6 +5,14 @@ import { initSetup } from './modules/setup.js';
 import { createAudit } from './modules/audit.js';
 import { loadConnections } from './modules/connections.js';
 
+if (globalThis.SIGNAL404_HOSTED) document.addEventListener('click', async (event) => {
+  const link = event.target.closest('a[href*="/artifacts/"]');
+  const match = link?.getAttribute('href')?.match(/^\/api\/scans\/([^/]+)\/artifacts\/([^/]+)$/);
+  if (!match) return;
+  event.preventDefault();
+  try { const { download } = await import('./modules/hosted.js'); await download(match[1], match[2]); } catch (error) { showError(error); }
+});
+
 // The composition root owns feature coordination; each feature owns its own state.
 let router;
 const workspace = createWorkspace((id) => router.go('audit-workspace', id));

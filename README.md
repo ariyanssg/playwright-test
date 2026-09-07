@@ -230,17 +230,33 @@ The test suite uses local fixture sites for 404, 410, server- and client-rendere
 
 ### Netlify deployment
 
-`netlify.toml` builds with `npm run build` and publishes **`dist/public`**.
+`netlify.toml` builds with `npm run build:netlify` and publishes **`dist/public`**.
 Publishing `dist` instead produces a root-page 404 because the dashboard's
 `index.html` is inside its `public` subdirectory.
 
-This publishes the frontend only. Netlify does not run `npm run serve` after
-building. The scanner currently needs a persistent Node 24 process, SQLite
-storage, writable report storage, and Chromium. To run audits online, host that
-backend on a persistent server/container and proxy `/api/*` from Netlify to it.
-The current server binds to loopback and has local-only security assumptions;
-configure authenticated access and the deployment's host before exposing it.
-Do not treat a successful static deploy as a working scanner deployment.
+The hosted edition uses browser IndexedDB for audits, candidates, Google search
+observations, checkpoints, and hours records. Stateless Netlify Functions run
+one Google result page, rendered URL check, or hours step per request. Chromium
+is bundled for the Linux serverless runtime; no separate server or paid database
+is needed. Google discovery uses SearchApi only. Exact TXT/CSV/XLSX/XLSM imports
+have no application row cap, and reports are generated and downloaded locally.
+Website crawling, sitemaps, backlinks, local Google-browser discovery and Search
+Console remain desktop features and are not advertised as hosted capabilities.
+
+Keep the audit tab open while scanning. After a tab closes or reloads, Resume
+continues from committed browser checkpoints. A request interrupted before its
+response is saved may need to run again; completed checks are retained. Browser
+Web Locks prevent duplicate workers for the same audit across tabs. Different
+browsers, devices, or Netlify preview origins have separate histories. Clearing
+site data removes audits; export reports to keep a durable copy. Browser storage
+quota errors stop the run instead of silently dropping progress.
+
+Online rendering has a 12-second navigation timeout and checks one URL at a time
+to fit function limits. Public-network validation and a DNS-pinning proxy protect
+every browser connection, including redirects and subresources. Worker requests
+are rate-limited. API credentials remain in Netlify, not in browser storage.
+Free hosting is subject to Netlify credits/limits; SearchApi and Google Places
+have their own quotas and pricing. This is not unlimited free scanning.
 
 For a linked Netlify site, import the project's local credentials before deploying:
 
@@ -252,9 +268,10 @@ npx netlify env:import .env
 
 Importing `.env` sets Netlify environment variables; it does not upload the file
 as a public asset. Keep `.env` ignored by Git and outside `dist/public`. The
-scanner's credentials also need to be configured on the host actually running
-the backend; Netlify build variables do not automatically reach another host.
-Dashboard JavaScript must never contain API keys.
+worker reads the imported variables at runtime. Dashboard JavaScript must never
+contain API keys. Run `npm run build` for the original desktop build, or
+`npm run build:netlify` for the hosted edition. Deploy both `dist/public` and the
+configured `netlify/functions` directory; deploying assets alone is insufficient.
 
 The dashboard is a local, dependency-free ES module application. Its five routes
 separate the overview, audit setup, findings, history, and optional connections.

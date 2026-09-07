@@ -42,7 +42,7 @@ async function routeRequest(service: ScanService, port: number, request: Incomin
   const url = new URL(request.url ?? '/', `http://127.0.0.1:${port}`);
   const method = request.method ?? 'GET';
 
-  if (method === 'GET' && (url.pathname === '/' || /^\/(?:app\.js|styles\.css|(?:modules|styles)\/[a-z-]+\.(?:js|css))$/.test(url.pathname))) {
+  if (method === 'GET' && (url.pathname === '/' || /^\/(?:app\.js|runtime\.js|styles\.css|(?:modules|styles)\/[a-z-]+\.(?:js|css))$/.test(url.pathname))) {
     return serveStatic(url.pathname, response);
   }
   if (method === 'GET' && url.pathname === '/api/health') {
