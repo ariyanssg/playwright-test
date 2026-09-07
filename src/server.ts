@@ -1,7 +1,7 @@
 import { createReadStream } from 'node:fs';
 import { mkdir, open as openFile, stat } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { extname, join, normalize } from 'node:path';
+import { extname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { appDataDir } from './config.js';
@@ -42,7 +42,7 @@ async function routeRequest(service: ScanService, port: number, request: Incomin
   const url = new URL(request.url ?? '/', `http://127.0.0.1:${port}`);
   const method = request.method ?? 'GET';
 
-  if (method === 'GET' && (url.pathname === '/' || url.pathname === '/app.js' || url.pathname === '/styles.css')) {
+  if (method === 'GET' && (url.pathname === '/' || /^\/(?:app\.js|styles\.css|(?:modules|styles)\/[a-z-]+\.(?:js|css))$/.test(url.pathname))) {
     return serveStatic(url.pathname, response);
   }
   if (method === 'GET' && url.pathname === '/api/health') {
@@ -51,6 +51,8 @@ async function routeRequest(service: ScanService, port: number, request: Incomin
   if (method === 'GET' && url.pathname === '/api/providers/status') {
     return json(response, 200, {
       searchApi: Boolean(process.env.SEARCHAPI_API_KEY),
+      googleBrowser: true,
+      googleDefaultProvider: process.env.SEARCHAPI_API_KEY ? 'searchapi' : 'browser',
       dataForSeo: Boolean(process.env.DATAFORSEO_LOGIN && process.env.DATAFORSEO_PASSWORD),
       googleMaps: Boolean(process.env.GOOGLE_MAPS_API_KEY),
     });
@@ -102,9 +104,9 @@ async function routeRequest(service: ScanService, port: number, request: Incomin
     if (!service.getScan(scanId)) return json(response, 404, { error: 'Unknown scan' });
     if (method === 'GET' && !action) return json(response, 200, await service.summary(scanId));
     if (method === 'GET' && action === 'results') {
-      const offset = Math.max(0, Number(url.searchParams.get('offset') || 0));
-      const limit = Math.min(1_000, Math.max(1, Number(url.searchParams.get('limit') || 200)));
-      return json(response, 200, service.results(scanId, offset, limit, url.searchParams.get('classification') ?? undefined));
+      const offset = pageNumber(url.searchParams.get('offset'), 0, 0, Number.MAX_SAFE_INTEGER);
+      const limit = pageNumber(url.searchParams.get('limit'), 200, 1, 1_000);
+      return json(response, 200, service.results(scanId, offset, limit, url.searchParams.get('classification') ?? undefined, url.searchParams.get('search') ?? ''));
     }
     if (method === 'POST' && action === 'cancel') {
       service.cancel(scanId);
@@ -170,10 +172,10 @@ async function serveArtifact(service: ScanService, scanId: string, fileName: str
 
 async function serveStatic(pathname: string, response: ServerResponse): Promise<void> {
   const fileName = pathname === '/' ? 'index.html' : pathname.slice(1);
-  if (!['index.html', 'app.js', 'styles.css'].includes(fileName)) return json(response, 404, { error: 'Not found' });
   const filePath = fileURLToPath(new URL(`./public/${fileName}`, import.meta.url));
-  const info = await stat(filePath);
-  response.writeHead(200, { 'content-type': contentType(fileName), 'content-length': info.size });
+  const info = await stat(filePath).catch(() => null);
+  if (!info?.isFile()) return json(response, 404, { error: 'Not found' });
+  response.writeHead(200, { 'content-type': contentType(fileName), 'content-length': info.size, 'cache-control': 'no-cache' });
   createReadStream(filePath).pipe(response);
 }
 
@@ -236,4 +238,11 @@ class HttpError extends Error {
   constructor(readonly status: number, message: string) {
     super(message);
   }
+}
+
+function pageNumber(raw: string | null, fallback: number, min: number, max: number): number {
+  if (raw === null || raw === '') return fallback;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < min || value > max) throw new HttpError(400, 'Invalid pagination value');
+  return value;
 }

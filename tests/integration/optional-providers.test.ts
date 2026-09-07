@@ -32,10 +32,10 @@ test('optional discovery provider failures become visible warnings without faili
       failOn: 'none',
     });
     const completed = await service.start(scan.id);
-    assert.equal(completed.status, 'completed');
+    assert.equal(completed.status, 'completed_partial');
     assert.equal(completed.processed, 1, 'The submitted site root remains usable without providers');
     assert.match(completed.warnings.join('\n'), /gsc .*invalid Google credentials/);
-    assert.match(completed.warnings.join('\n'), /searchapi .*SEARCHAPI_API_KEY is required/);
+    assert.match(completed.warnings.join('\n'), /Google discovery incomplete .*SEARCHAPI_API_KEY is required/);
     assert.match(completed.warnings.join('\n'), /backlinks .*DATAFORSEO_LOGIN.*DATAFORSEO_PASSWORD/);
   } finally {
     if (previousKey) process.env.SEARCHAPI_API_KEY = previousKey;

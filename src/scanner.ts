@@ -104,7 +104,7 @@ export class BrowserScanner {
     }
     rendered ??= networkFailure(candidate.normalizedUrl, 'Unknown navigation failure');
     const robots = await this.robots.get(candidate.normalizedUrl);
-    const baseline = rendered.status && rendered.status >= 200 && rendered.status < 300
+    const baseline = rendered.status && rendered.status >= 200 && rendered.status < 300 && /html/i.test(rendered.contentType ?? '')
       ? await this.getBaseline(new URL(candidate.normalizedUrl).origin)
       : null;
     const decision = classifyPage(rendered, baseline);
@@ -187,11 +187,41 @@ async function renderPage(page: Page, url: string, timeoutMs: number): Promise<R
     };
   } catch (error) {
     const responseMs = Math.round(performance.now() - started);
+    if (error instanceof Error && /download is starting/i.test(error.message)) {
+      return renderDownload(page, url, timeoutMs, started);
+    }
     const timedOut = error instanceof errors.TimeoutError || /timeout/i.test(error instanceof Error ? error.message : String(error));
     return {
       ...networkFailure(url, error instanceof Error ? error.message : String(error), responseMs),
       timedOut,
     };
+  }
+}
+
+async function renderDownload(page: Page, url: string, timeoutMs: number, started: number): Promise<RenderedPage> {
+  const redirects: RedirectHop[] = [];
+  let current = url;
+  try {
+    for (let count = 0; count <= 10; count += 1) {
+      const response = await page.context().request.get(current, { timeout: timeoutMs, maxRedirects: 0 });
+      const status = response.status();
+      const headers = response.headers();
+      redirects.push({ url: current, status, location: headers.location });
+      await response.dispose();
+      if (status >= 300 && status < 400 && headers.location) {
+        current = new URL(headers.location, current).href;
+        continue;
+      }
+      return {
+        requestedUrl: url, finalUrl: current, status, redirects, redirectCount: redirects.length - 1,
+        title: '', h1: '', mainText: '', canonical: null, contentType: headers['content-type'] ?? null,
+        responseMs: Math.round(performance.now() - started), retryAfterMs: parseRetryAfter(headers['retry-after']),
+        error: null, timedOut: false,
+      };
+    }
+    return networkFailure(url, 'Too many download redirects');
+  } catch (error) {
+    return networkFailure(url, error instanceof Error ? error.message : String(error), Math.round(performance.now() - started));
   }
 }
 

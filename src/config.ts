@@ -1,6 +1,6 @@
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
-import type { ScanOptions } from './types.js';
+import { DISCOVERY_SOURCES, type ScanOptions } from './types.js';
 
 export const APP_NAME = 'seo404-auditor';
 
@@ -25,7 +25,11 @@ export function defaultScanOptions(): ScanOptions {
     sites: [],
     urls: [],
     inputFiles: [],
-    discovery: ['import', 'sitemap', 'crawl', 'searchapi', 'gsc', 'backlinks'],
+    discovery: ['google'],
+    googleProvider: 'auto',
+    googleCountry: 'gb',
+    googleLanguage: 'en',
+    googleMaxPages: 50,
     concurrency: 5,
     perHostConcurrency: 2,
     hostDelayMs: 300,
@@ -47,7 +51,18 @@ export function mergeScanOptions(input: Partial<ScanOptions>): ScanOptions {
   merged.sites = input.sites ?? [];
   merged.urls = input.urls ?? [];
   merged.inputFiles = input.inputFiles ?? [];
-  merged.discovery = input.discovery ?? defaultScanOptions().discovery;
+  merged.discovery = input.discovery ?? (merged.sites.length ? ['google'] : ['import']);
+  if (!Array.isArray(merged.discovery) || !merged.discovery.length || merged.discovery.some((source) => !DISCOVERY_SOURCES.includes(source))) {
+    throw new Error('Choose valid discovery sources');
+  }
+  merged.discovery = [...new Set(merged.discovery)];
+  if ((merged.urls.length || merged.inputFiles.length) && !merged.discovery.includes('import')) merged.discovery.unshift('import');
+  if (!['auto', 'searchapi', 'browser'].includes(merged.googleProvider)) throw new Error('Google provider must be auto, searchapi, or browser');
+  merged.googleCountry = String(merged.googleCountry).toLowerCase();
+  merged.googleLanguage = String(merged.googleLanguage).toLowerCase();
+  if (!/^[a-z]{2}$/.test(merged.googleCountry)) throw new Error('Google country must be a two-letter country code');
+  if (!/^[a-z]{2,3}(?:-[a-z]{2,4})?$/.test(merged.googleLanguage)) throw new Error('Google language must be a language code such as en');
+  merged.googleMaxPages = positiveInteger(merged.googleMaxPages, 'Google page budget');
   merged.concurrency = positiveInteger(merged.concurrency, 'concurrency');
   merged.perHostConcurrency = positiveInteger(merged.perHostConcurrency, 'per-host concurrency');
   merged.hostDelayMs = nonNegativeInteger(merged.hostDelayMs, 'host delay');

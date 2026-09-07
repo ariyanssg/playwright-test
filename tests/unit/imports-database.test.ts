@@ -8,9 +8,12 @@ import { ScanDatabase } from '../../src/database.js';
 import { importRowsFromFile, importUrlsFromFile } from '../../src/imports.js';
 import { defaultScanOptions } from '../../src/config.js';
 
-test('a restaurant site scan defaults to every available discovery source', () => {
+test('a restaurant site scan defaults to Google search discovery', () => {
   const options = defaultScanOptions();
-  assert.deepEqual(options.discovery, ['import', 'sitemap', 'crawl', 'searchapi', 'gsc', 'backlinks']);
+  assert.deepEqual(options.discovery, ['google']);
+  assert.equal(options.googleCountry, 'gb');
+  assert.equal(options.googleLanguage, 'en');
+  assert.equal(options.googleMaxPages, 50);
   assert.equal(options.backlinkLimit, 100_000);
 });
 

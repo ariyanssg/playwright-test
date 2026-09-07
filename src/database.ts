@@ -1,6 +1,7 @@
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import type { GoogleDiscoveryState } from './types.js';
 import { CLASSIFICATIONS, HOURS_COMPARISON_STATUSES, type BacklinkRecord, type Candidate, type CandidateRecord, type Classification, type HoursComparisonRecord, type HoursComparisonStatus, type PlaceMatchConfidence, type ScanOptions, type ScanResult, type StoredScan } from './types.js';
 
 interface ScanRow {
@@ -133,6 +134,12 @@ export class ScanDatabase {
         PRIMARY KEY (scan_id, site_key)
       );
       CREATE INDEX IF NOT EXISTS restaurant_hours_status_idx ON restaurant_hours(scan_id, status);
+      CREATE TABLE IF NOT EXISTS google_discovery (
+        scan_id TEXT NOT NULL REFERENCES scans(id) ON DELETE CASCADE,
+        site TEXT NOT NULL,
+        state_json TEXT NOT NULL,
+        PRIMARY KEY (scan_id, site)
+      );
     `);
   }
 
@@ -157,7 +164,7 @@ export class ScanDatabase {
     return row ? mapScan(row) : null;
   }
 
-  listScans(limit = 50): StoredScan[] {
+  listScans(limit = -1): StoredScan[] {
     const rows = this.db.prepare('SELECT * FROM scans ORDER BY created_at DESC LIMIT ?').all(limit) as unknown as ScanRow[];
     return rows.map(mapScan);
   }
@@ -185,6 +192,8 @@ export class ScanDatabase {
       const sources = mergeSources(JSON.parse(existing.sources_json), candidate.sources);
       this.db.prepare('UPDATE candidates SET sources_json = ? WHERE scan_id = ? AND normalized_url = ?')
         .run(JSON.stringify(sources), scanId, candidate.normalizedUrl);
+      this.db.prepare("UPDATE candidates SET result_json = json_set(result_json, '$.sources', json(?)) WHERE scan_id = ? AND normalized_url = ? AND result_json IS NOT NULL")
+        .run(JSON.stringify(sources), scanId, candidate.normalizedUrl);
     } else {
       this.db.prepare(`INSERT INTO candidates
         (scan_id, input_url, normalized_url, site, sources_json) VALUES (?, ?, ?, ?, ?)`)
@@ -199,6 +208,44 @@ export class ScanDatabase {
       ? this.db.prepare('SELECT * FROM candidates WHERE scan_id = ? AND status = ? ORDER BY normalized_url').all(scanId, status)
       : this.db.prepare('SELECT * FROM candidates WHERE scan_id = ? ORDER BY normalized_url').all(scanId)) as unknown as CandidateRow[];
     return rows.map(mapCandidate);
+  }
+
+  googleDiscovery(scanId: string): GoogleDiscoveryState[] {
+    return (this.db.prepare('SELECT state_json FROM google_discovery WHERE scan_id = ? ORDER BY site').all(scanId) as Array<{ state_json: string }>)
+      .map((row) => JSON.parse(row.state_json) as GoogleDiscoveryState);
+  }
+
+  saveGooglePage(scanId: string, state: GoogleDiscoveryState, candidates: Candidate[] = []): void {
+    // A crash cannot advance a search cursor without retaining the URLs it found.
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      for (const candidate of candidates) this.addCandidate(scanId, candidate);
+      this.db.prepare('INSERT INTO google_discovery (scan_id, site, state_json) VALUES (?, ?, ?) ON CONFLICT(scan_id, site) DO UPDATE SET state_json = excluded.state_json')
+        .run(scanId, state.site, JSON.stringify(state));
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+  }
+
+  /** Filter before pagination; materialize only the visible evidence records. */
+  queryResults(scanId: string, offset: number, limit: number, classification?: string, search = ''): { total: number; items: CandidateRecord[] } {
+    const clauses = ['scan_id = ?', 'result_json IS NOT NULL'];
+    const params: Array<string | number> = [scanId];
+    if (classification && classification !== 'all') {
+      clauses.push("json_extract(result_json, '$.classification') = ?");
+      params.push(classification);
+    }
+    if (search.trim()) {
+      clauses.push("(instr(lower(normalized_url), ?) > 0 OR instr(lower(json_extract(result_json, '$.title')), ?) > 0 OR instr(lower(json_extract(result_json, '$.reasons')), ?) > 0)");
+      const term = search.trim().toLowerCase();
+      params.push(term, term, term);
+    }
+    const where = clauses.join(' AND ');
+    const count = this.db.prepare(`SELECT COUNT(*) AS total FROM candidates WHERE ${where}`).get(...params) as { total: number };
+    const rows = this.db.prepare(`SELECT * FROM candidates WHERE ${where} ORDER BY normalized_url LIMIT ? OFFSET ?`).all(...params, limit, offset) as unknown as CandidateRow[];
+    return { total: count.total, items: rows.map(mapCandidate) };
   }
 
   addBacklink(scanId: string, backlink: BacklinkRecord): void {

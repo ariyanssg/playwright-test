@@ -99,7 +99,8 @@ export async function writeReports(db: ScanDatabase, scanId: string, scanOverrid
     hours,
     coverage: {
       googleSiteOperator: 'Diagnostic and not exhaustive',
-      searchApi: scan.options.discovery.includes('searchapi') ? 'First 100 Google results maximum' : 'Not used',
+      googleDiscovery: db.googleDiscovery(scanId),
+      searchApi: db.googleDiscovery(scanId).some((state) => state.providersUsed?.includes('searchapi')) || candidates.some((item) => item.sources.some((source) => source.source === 'searchapi')) ? 'Paginated Google organic results; see per-site coverage' : 'No successful SearchApi pages recorded',
       searchConsole: scan.options.discovery.includes('gsc') ? `${scan.options.gscDays}-day Search Analytics window; not an index inventory` : 'Not used',
       backlinks: scan.options.discovery.includes('backlinks')
         ? `DataForSEO backlink index, capped at ${(scan.options.backlinkLimit ?? 100_000).toLocaleString()} rows per site; not the entire web`
@@ -138,6 +139,25 @@ async function writeWorkbook(filePath: string, db: ScanDatabase, scanId: string,
   buildBacklinksSheet(backlinkSheet, backlinks, candidates);
   if (hoursSheet) buildHoursSheet(hoursSheet, hours);
   buildSourcesSheet(sources, candidates, scan);
+  const googleStates = db.googleDiscovery(scanId);
+  if (googleStates.length) {
+    const coverage = workbook.addWorksheet('Google Coverage', { views: [{ state: 'frozen', ySplit: 1, showGridLines: false }] });
+    coverage.columns = [
+      { header: 'Website', key: 'site', width: 40 }, { header: 'Provider', key: 'provider', width: 16 },
+      { header: 'Market', key: 'market', width: 14 }, { header: 'Coverage', key: 'status', width: 18 },
+      { header: 'Search pages fetched', key: 'pages', width: 24 }, { header: 'Query', key: 'query', width: 65 },
+      { header: 'Query exhausted', key: 'done', width: 20 }, { header: 'Next result page', key: 'nextPage', width: 20 },
+      { header: 'Last updated', key: 'updatedAt', width: 26 }, { header: 'Issue', key: 'error', width: 65 },
+    ];
+    for (const state of googleStates) for (const query of state.queries) coverage.addRow({
+      site: safeText(state.site), provider: state.providersUsed?.join(', ') || state.provider, market: `${state.country}/${state.language}`, status: state.status,
+      pages: state.pagesFetched, query: safeText(query.query), done: query.done ? 'Yes' : 'No', nextPage: query.nextPage,
+      updatedAt: state.updatedAt, error: safeText(state.error ?? ''),
+    });
+    styleHeader(coverage.getRow(1));
+    coverage.getColumn('error').alignment = { wrapText: true, vertical: 'top' };
+    coverage.addRow({ site: 'Coverage is observed Google results, not a complete index inventory.' });
+  }
   await workbook.xlsx.writeFile(filePath);
 }
 
@@ -294,6 +314,7 @@ function buildResultSheet(sheet: Worksheet, results: ScanResult[]): void {
     { header: 'GSC verdict', key: 'gscVerdict', width: 18 },
     { header: 'GSC coverage', key: 'gscCoverage', width: 28 },
     { header: 'Error', key: 'error', width: 42 },
+    { header: 'Discovery Evidence', key: 'sourceEvidence', width: 70 },
   ];
   styleHeader(sheet.getRow(1));
   for (const result of results) {
@@ -308,10 +329,10 @@ function buildResultSheet(sheet: Worksheet, results: ScanResult[]): void {
     row.getCell('responseMs').numFmt = '#,##0';
     styleClassification(row.getCell('classification'), result.classification);
     row.alignment = { vertical: 'top' };
-    for (const key of ['reasons', 'title', 'error']) row.getCell(key).alignment = { vertical: 'top', wrapText: true };
+    for (const key of ['reasons', 'title', 'error', 'sourceEvidence']) row.getCell(key).alignment = { vertical: 'top', wrapText: true };
   }
   const lastRow = Math.max(1, sheet.rowCount);
-  sheet.autoFilter = { from: 'A1', to: `Q${lastRow}` };
+  sheet.autoFilter = { from: 'A1', to: `R${lastRow}` };
   sheet.pageSetup = { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0, printTitlesRow: '1:1' };
 }
 
@@ -429,12 +450,14 @@ function buildSourcesSheet(sheet: Worksheet, candidates: CandidateRecord[], scan
     import: 'Every valid URL supplied by the user',
     sitemap: 'URLs exposed by accessible same-site sitemaps',
     crawl: `Rendered same-site crawl capped at ${scan.options.crawlLimit.toLocaleString()} URLs per site`,
-    searchapi: 'First 100 visible Google site: results maximum; not exhaustive',
+    google: `Google organic results from API or browser; ${(scan.options.googleMaxPages ?? 50).toLocaleString()} search pages per site maximum`,
+    searchapi: 'Google organic results via SearchApi; see Google Coverage for actual pagination and outcome',
+    google_browser: 'Google organic results observed in the local browser; see Google Coverage',
     gsc: `${scan.options.gscDays}-day Search Analytics pages; not an index inventory`,
     backlinks: `DataForSEO backlink index capped at ${(scan.options.backlinkLimit ?? 100_000).toLocaleString()} rows per site; provider-billed and not the entire web`,
   };
-  for (const source of ['import', 'sitemap', 'crawl', 'searchapi', 'gsc', 'backlinks']) {
-    sheet.addRow([source, sourceCounts.get(source) ?? 0, scan.options.discovery.includes(source as never) ? 'Yes' : 'No', coverage[source]]);
+  for (const source of ['import', 'sitemap', 'crawl', 'google', 'searchapi', 'google_browser', 'gsc', 'backlinks']) {
+    sheet.addRow([source, sourceCounts.get(source) ?? 0, scan.options.discovery.includes(source as never) || sourceCounts.has(source) ? 'Yes' : 'No', coverage[source]]);
   }
   sheet.addRow([]);
   sheet.addRow(['Run warnings']);
@@ -445,6 +468,10 @@ function buildSourcesSheet(sheet: Worksheet, candidates: CandidateRecord[], scan
   sheet.addRow(['Configuration', 'Value']);
   styleHeader(sheet.getRow(sheet.rowCount));
   const configRows: Array<[string, string | number | boolean]> = [
+    ['Google provider', scan.options.googleProvider ?? 'searchapi'],
+    ['Google country', scan.options.googleCountry ?? 'Not recorded'],
+    ['Google language', scan.options.googleLanguage ?? 'Not recorded'],
+    ['Google page budget / site', scan.options.googleMaxPages ?? 50],
     ['Hours comparison', scan.options.checkHours],
     ['Hours tolerance (min)', scan.options.hoursToleranceMinutes],
     ['Hours pages per site', scan.options.hoursPageLimit],

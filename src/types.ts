@@ -1,4 +1,4 @@
-export const DISCOVERY_SOURCES = ['import', 'sitemap', 'crawl', 'searchapi', 'gsc', 'backlinks'] as const;
+export const DISCOVERY_SOURCES = ['import', 'sitemap', 'crawl', 'google', 'searchapi', 'google_browser', 'gsc', 'backlinks'] as const;
 export type DiscoverySource = (typeof DISCOVERY_SOURCES)[number];
 
 export const CLASSIFICATIONS = [
@@ -17,10 +17,12 @@ export type Classification = (typeof CLASSIFICATIONS)[number];
 export type ScanStatus =
   | 'queued'
   | 'discovering'
+  | 'waiting_for_google'
   | 'scanning'
   | 'comparing_hours'
   | 'reporting'
   | 'completed'
+  | 'completed_partial'
   | 'cancelled'
   | 'failed';
 
@@ -36,6 +38,12 @@ export interface DiscoveryEvidence {
   averagePosition?: number;
   property?: string;
   provider?: string;
+  resultPage?: number;
+  searchUrl?: string;
+  country?: string;
+  language?: string;
+  observedAt?: string;
+  resultKind?: 'organic' | 'sitelink';
   backlinkSourceUrl?: string;
   backlinkSourceDomain?: string;
   anchor?: string | null;
@@ -121,6 +129,10 @@ export interface ScanOptions {
   urls: string[];
   inputFiles: string[];
   discovery: DiscoverySource[];
+  googleProvider: 'auto' | 'searchapi' | 'browser';
+  googleCountry: string;
+  googleLanguage: string;
+  googleMaxPages: number;
   outputDir?: string;
   concurrency: number;
   perHostConcurrency: number;
@@ -165,6 +177,28 @@ export interface ScanSummary {
   backlinkCount: number;
   hoursCounts: Partial<Record<HoursComparisonStatus, number>>;
   artifacts: string[];
+  googleDiscovery: GoogleDiscoveryState[];
+}
+
+export interface GoogleQueryState {
+  query: string;
+  nextPage: number;
+  nextUrl?: string;
+  fingerprints: string[];
+  done: boolean;
+}
+
+export interface GoogleDiscoveryState {
+  site: string;
+  provider: 'searchapi' | 'browser';
+  providersUsed?: Array<'searchapi' | 'browser'>;
+  country: string;
+  language: string;
+  pagesFetched: number;
+  queries: GoogleQueryState[];
+  status: 'running' | 'waiting' | 'exhausted' | 'limited' | 'failed' | 'cancelled';
+  error?: string;
+  updatedAt: string;
 }
 
 export interface ScanProgressEvent {

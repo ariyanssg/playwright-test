@@ -48,6 +48,15 @@ export async function startFixtureSite(): Promise<FixtureSite> {
     if (url.pathname === '/hard') return html(response, 404, 'Page not found', '<h1>404 — Page not found</h1><main>The page does not exist.</main>');
     if (url.pathname === '/gone') return html(response, 410, 'Gone', '<h1>410 Gone</h1><main>This menu has been permanently removed.</main>');
     if (url.pathname === '/soft') return html(response, 200, 'Page not found', '<h1>Page not found</h1><main>Sorry, this page does not exist. Return to our restaurant home page.</main>');
+    if (url.pathname === '/error-template') return html(response, 200, 'Restaurant - 404 Error Page', '<main><h1>Ahoy! You seem a little lost.</h1><h2>404 Not Found</h2></main>');
+    if (url.pathname === '/menu.pdf') {
+      response.writeHead(200, { 'content-type': 'application/pdf', 'content-disposition': 'attachment; filename="menu.pdf"' }).end('%PDF-1.4\nTest menu');
+      return;
+    }
+    if (url.pathname === '/download-redirect') {
+      response.writeHead(302, { location: '/menu.pdf' }).end();
+      return;
+    }
     if (url.pathname === '/js-soft') {
       return html(response, 200, 'Loading', '<h1>Loading</h1><main id="main">Please wait</main><script>setTimeout(() => { document.title = "404 — Page not found"; document.querySelector("h1").textContent = "Page not found"; document.querySelector("#main").textContent = "This page does not exist"; }, 400)</script>');
     }

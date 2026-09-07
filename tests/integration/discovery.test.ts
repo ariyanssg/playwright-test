@@ -3,7 +3,7 @@ import { createServer } from 'node:http';
 import test from 'node:test';
 import { discoverCrawl } from '../../src/discovery/crawl.js';
 import { discoverBacklinks } from '../../src/discovery/backlinks.js';
-import { discoverSearchApi } from '../../src/discovery/searchapi.js';
+import { fetchSearchApiPage } from '../../src/discovery/searchapi.js';
 import { discoverSitemaps } from '../../src/discovery/sitemap.js';
 import { RobotsCache } from '../../src/robots.js';
 import { startFixtureSite } from '../helpers/fixture-site.js';
@@ -42,7 +42,7 @@ test('rendered crawl finds same-site links but does not visit robots-disallowed 
 test('SearchApi adapter reports missing credentials and provider quota errors', async () => {
   const previousKey = process.env.SEARCHAPI_API_KEY;
   delete process.env.SEARCHAPI_API_KEY;
-  await assert.rejects(() => discoverSearchApi('https://example.com'), /SEARCHAPI_API_KEY is required/);
+  await assert.rejects(() => fetchSearchApiPage({ query: 'site:example.com', page: 1, country: 'gb', language: 'en' }), /SEARCHAPI_API_KEY is required/);
 
   const server = createServer((_request, response) => {
     response.writeHead(429, { 'content-type': 'application/json' });
@@ -53,7 +53,7 @@ test('SearchApi adapter reports missing credentials and provider quota errors', 
   if (!address || typeof address === 'string') throw new Error('Mock SearchApi did not bind');
   process.env.SEARCHAPI_ENDPOINT = `http://127.0.0.1:${address.port}/search`;
   try {
-    await assert.rejects(() => discoverSearchApi('https://example.com', 'test-key'), /monthly quota exceeded/);
+    await assert.rejects(() => fetchSearchApiPage({ query: 'site:example.com', page: 1, country: 'gb', language: 'en' }, 'test-key'), /monthly quota exceeded/);
   } finally {
     if (previousKey) process.env.SEARCHAPI_API_KEY = previousKey;
     else delete process.env.SEARCHAPI_API_KEY;
@@ -62,11 +62,14 @@ test('SearchApi adapter reports missing credentials and provider quota errors', 
   }
 });
 
-test('SearchApi adapter preserves result evidence and filters external domains', async () => {
+test('SearchApi adapter preserves organic evidence for the same-site coordinator', async () => {
   const server = createServer((request, response) => {
     const url = new URL(request.url ?? '/', 'http://127.0.0.1');
     assert.equal(url.searchParams.get('q'), 'site:example.com');
-    assert.equal(url.searchParams.get('num'), '100');
+    assert.equal(url.searchParams.get('num'), null);
+    assert.equal(url.searchParams.get('page'), '1');
+    assert.equal(url.searchParams.get('gl'), 'gb');
+    assert.equal(url.searchParams.get('hl'), 'en');
     assert.equal(url.searchParams.get('api_key'), null);
     assert.equal(request.headers.authorization, 'Bearer test-key');
     response.writeHead(200, { 'content-type': 'application/json' });
@@ -80,11 +83,11 @@ test('SearchApi adapter preserves result evidence and filters external domains',
   if (!address || typeof address === 'string') throw new Error('Mock SearchApi did not bind');
   process.env.SEARCHAPI_ENDPOINT = `http://127.0.0.1:${address.port}/search`;
   try {
-    const result = await discoverSearchApi('https://example.com', 'test-key');
-    assert.equal(result.urls.length, 1);
-    assert.equal(result.urls[0]?.evidence.position, 3);
-    assert.equal(result.urls[0]?.evidence.query, 'site:example.com');
-    assert.match(result.coverageNote, /100/);
+    const result = await fetchSearchApiPage({ query: 'site:example.com', page: 1, country: 'gb', language: 'en' }, 'test-key');
+    assert.equal(result.results.length, 2);
+    assert.equal(result.results[0]?.position, 3);
+    assert.match(result.searchUrl, /site%3Aexample.com/);
+    assert.equal(result.hasNext, false);
   } finally {
     delete process.env.SEARCHAPI_ENDPOINT;
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
@@ -191,3 +194,46 @@ function restoreEnv(name: string, value: string | undefined): void {
   if (value === undefined) delete process.env[name];
   else process.env[name] = value;
 }
+
+test('SearchApi reads pagination and sitelinks, rejects malformed successes, and redacts API keys in errors', async () => {
+  let payload: unknown = {
+    organic_results: [{ title: 'Restaurant', position: 1, link: 'https://example.com/', sitelinks: {
+      inline: [{ title: 'Menu', link: 'https://example.com/menu.pdf' }],
+      expanded: [{ title: 'Old offer', snippet: '404', link: 'https://example.com/old?year=2024' }],
+    } }],
+    pagination: { next: 'https://www.google.com/search?start=10' },
+    ads: [{ link: 'https://example.com/advert' }],
+  };
+  const server = createServer((_request, response) => response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(payload)));
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  if (!address || typeof address === 'string') throw new Error('Provider fixture did not bind');
+  const previous = process.env.SEARCHAPI_ENDPOINT;
+  process.env.SEARCHAPI_ENDPOINT = `http://127.0.0.1:${address.port}/search`;
+  const request = { query: 'site:example.com', page: 1, country: 'gb', language: 'en' };
+  try {
+    const result = await fetchSearchApiPage(request, 'test-secret');
+    assert.equal(result.results.length, 3);
+    assert.deepEqual(result.results.map((item) => item.kind), ['organic', 'sitelink', 'sitelink']);
+    assert.equal(result.hasNext, true);
+    payload = {};
+    await assert.rejects(fetchSearchApiPage(request, 'test-secret'), /recognizable organic results/);
+    payload = { error: 'Invalid key test-secret' };
+    await assert.rejects(fetchSearchApiPage(request, 'test-secret'), (error: Error) => {
+      assert.match(error.message, /\[redacted\]/);
+      assert.doesNotMatch(error.message, /test-secret/);
+      return true;
+    });
+    payload = { search_information: { total_results: 0 } };
+    assert.equal((await fetchSearchApiPage(request, 'test-secret')).results.length, 0);
+    payload = { search_metadata: { status: 'Success' }, error: "Google didn't return any results." };
+    const exhausted = await fetchSearchApiPage({ ...request, page: 2 }, 'test-secret');
+    assert.deepEqual(exhausted.results, []);
+    assert.equal(exhausted.hasNext, false);
+    payload = { search_metadata: { status: 'Error' }, error: "Google didn't return any results." };
+    await assert.rejects(fetchSearchApiPage(request, 'test-secret'), /didn't return any results/);
+  } finally {
+    if (previous === undefined) delete process.env.SEARCHAPI_ENDPOINT; else process.env.SEARCHAPI_ENDPOINT = previous;
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
+});

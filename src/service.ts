@@ -6,7 +6,7 @@ import { appDataDir, defaultOutputDir, mergeScanOptions } from './config.js';
 import { ScanDatabase, isActionable } from './database.js';
 import { discoverCrawl } from './discovery/crawl.js';
 import { discoverBacklinks } from './discovery/backlinks.js';
-import { discoverSearchApi } from './discovery/searchapi.js';
+import { discoverGoogle, defaultGoogleProviders, type GoogleProviders } from './discovery/google-search.js';
 import { discoverSitemaps, type DiscoveredUrl } from './discovery/sitemap.js';
 import { GoogleSearchConsole } from './google.js';
 import { importRowsFromFile, type ImportedRow } from './imports.js';
@@ -26,8 +26,10 @@ export class ScanService {
   readonly robots = new RobotsCache();
   private readonly events = new EventEmitter();
   private readonly active = new Map<string, Promise<StoredScan>>();
+  private readonly discoveryControllers = new Map<string, AbortController>();
+  private readonly googleWaiters = new Map<string, () => void>();
 
-  constructor(databasePath = join(appDataDir(), 'seo404.sqlite')) {
+  constructor(databasePath = join(appDataDir(), 'seo404.sqlite'), private readonly googleProviders: GoogleProviders = defaultGoogleProviders) {
     this.db = new ScanDatabase(databasePath);
     this.google = new GoogleSearchConsole();
   }
@@ -54,6 +56,10 @@ export class ScanService {
     const scan = this.db.getScan(scanId);
     if (!scan) throw new Error(`Unknown scan: ${scanId}`);
     if (scan.status === 'completed') return scan;
+    if (this.active.has(scanId)) {
+      this.googleWaiters.get(scanId)?.();
+      return this.active.get(scanId)!;
+    }
     this.db.resetForResume(scanId);
     return this.start(scanId);
   }
@@ -61,6 +67,8 @@ export class ScanService {
   cancel(scanId: string): void {
     if (!this.db.getScan(scanId)) throw new Error(`Unknown scan: ${scanId}`);
     this.db.requestCancel(scanId);
+    this.discoveryControllers.get(scanId)?.abort();
+    this.googleWaiters.get(scanId)?.();
     this.emit(scanId, 'Cancellation requested');
   }
 
@@ -72,11 +80,9 @@ export class ScanService {
     return this.db.listScans();
   }
 
-  results(scanId: string, offset = 0, limit = 200, classification?: string): { total: number; items: CandidateRecord[] } {
+  results(scanId: string, offset = 0, limit = 200, classification?: string, search = ''): { total: number; items: CandidateRecord[] } {
     if (!this.db.getScan(scanId)) throw new Error(`Unknown scan: ${scanId}`);
-    const completed = this.db.listCandidates(scanId)
-      .filter((candidate) => candidate.result && (!classification || classification === 'all' || candidate.result.classification === classification));
-    return { total: completed.length, items: completed.slice(offset, offset + limit) };
+    return this.db.queryResults(scanId, offset, limit, classification, search);
   }
 
   close(): void {
@@ -105,6 +111,7 @@ export class ScanService {
       backlinkCount: this.db.backlinkCount(scanId),
       hoursCounts: this.db.hoursStatusCounts(scanId),
       artifacts,
+      googleDiscovery: this.db.googleDiscovery(scanId),
     };
   }
 
@@ -117,6 +124,10 @@ export class ScanService {
   private async run(scanId: string): Promise<StoredScan> {
     const initial = this.db.getScan(scanId);
     if (!initial) throw new Error(`Unknown scan: ${scanId}`);
+    // Old scans keep their explicit source choices; only fill newly added options.
+    initial.options = mergeScanOptions(initial.options);
+    const controller = new AbortController();
+    this.discoveryControllers.set(scanId, controller);
     try {
       this.db.updateScan(scanId, { status: 'discovering', startedAt: initial.startedAt ?? new Date().toISOString(), error: null });
       this.emit(scanId, 'Collecting candidate URLs');
@@ -143,14 +154,29 @@ export class ScanService {
       this.emit(scanId, 'Writing XLSX, CSV, and JSON reports');
       await mkdir(initial.outputDir, { recursive: true });
       const cancelled = Boolean(this.db.getScan(scanId)?.cancelRequested);
+      const googleStates = this.db.googleDiscovery(scanId);
+      if (cancelled) for (const state of googleStates) {
+        if (state.status === 'waiting' || state.status === 'running') {
+          state.status = 'cancelled';
+          state.error = undefined;
+          state.updatedAt = new Date().toISOString();
+          this.db.saveGooglePage(scanId, state);
+        }
+      }
+      const incomplete = googleStates.some((state) => state.status !== 'exhausted');
+      const failedDiscovery = googleStates.some((state) => state.status === 'failed');
+      const noCandidates = this.db.getScan(scanId)!.total === 0;
+      const status = cancelled ? 'cancelled' : failedDiscovery && noCandidates ? 'failed' : incomplete ? 'completed_partial' : 'completed';
       const finalState: StoredScan = {
         ...this.db.getScan(scanId)!,
-        status: cancelled ? 'cancelled' : 'completed',
+        options: initial.options,
+        status,
+        error: status === 'failed' ? 'Google discovery failed; no URLs were verified. Resume after resolving the provider issue.' : null,
         completedAt: new Date().toISOString(),
       };
       await writeReports(this.db, scanId, finalState);
-      this.db.updateScan(scanId, { status: finalState.status, completedAt: finalState.completedAt });
-      this.emit(scanId, cancelled ? 'Cancelled; partial reports are ready' : 'Scan completed');
+      this.db.updateScan(scanId, { status: finalState.status, completedAt: finalState.completedAt, error: finalState.error });
+      this.emit(scanId, cancelled ? 'Cancelled; partial reports are ready' : status === 'failed' ? finalState.error! : incomplete ? 'URL checks finished; Google discovery is incomplete. Review coverage.' : noCandidates ? 'Google returned no matching URLs for the completed searches. This is not a clean-site verdict.' : 'Scan completed');
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.db.appendWarning(scanId, message);
@@ -168,6 +194,9 @@ export class ScanService {
       }
       this.db.updateScan(scanId, { status: 'failed', error: message, completedAt: failedState.completedAt });
       this.emit(scanId, `Failed: ${message}`);
+    } finally {
+      this.discoveryControllers.delete(scanId);
+      this.googleWaiters.delete(scanId);
     }
     return this.db.getScan(scanId)!;
   }
@@ -193,7 +222,8 @@ export class ScanService {
         placeId: row.placeId,
       });
     }
-    for (const rawSite of options.sites) {
+    const googleOnly = options.discovery.every((source) => ['google', 'searchapi', 'google_browser'].includes(source));
+    for (const rawSite of googleOnly ? [] : options.sites) {
       const site = normalizeUrl(rawSite);
       this.add(scanId, site, { source: 'import' });
     }
@@ -225,14 +255,13 @@ export class ScanService {
           this.warnAdapter(scanId, 'sitemap', site, error);
         }
       }
-      if (options.discovery.includes('searchapi')) {
-        try {
-          const result = await discoverSearchApi(site);
-          for (const item of result.urls) this.addDiscovered(scanId, item);
-          this.db.appendWarning(scanId, result.coverageNote);
-        } catch (error) {
-          this.warnAdapter(scanId, 'searchapi', site, error);
-        }
+      if (options.discovery.some((source) => ['google', 'searchapi', 'google_browser'].includes(source))) {
+        await discoverGoogle(site, options, {
+          db: this.db, scanId, signal: this.discoveryControllers.get(scanId)!.signal,
+          progress: (message) => this.emit(scanId, message),
+          warn: (message) => this.db.appendWarning(scanId, message),
+          waitForUser: (message) => this.waitForGoogle(scanId, message),
+        }, this.googleProviders);
       }
       if (options.discovery.includes('backlinks')) {
         try {
@@ -307,6 +336,18 @@ export class ScanService {
     } finally {
       await inspector.close();
     }
+  }
+
+  private async waitForGoogle(scanId: string, message: string): Promise<void> {
+    await new Promise<void>((resolve) => {
+      // Register before emitting; a fast Continue/Cancel cannot be lost.
+      this.googleWaiters.set(scanId, resolve);
+      this.db.updateScan(scanId, { status: 'waiting_for_google' });
+      this.emit(scanId, message);
+      if (this.db.getScan(scanId)?.cancelRequested) resolve();
+    });
+    this.googleWaiters.delete(scanId);
+    if (!this.db.getScan(scanId)?.cancelRequested) this.db.updateScan(scanId, { status: 'discovering' });
   }
 
   private async inspectFindings(scanId: string): Promise<void> {

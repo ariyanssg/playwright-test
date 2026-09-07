@@ -19,10 +19,10 @@ test('dashboard starts a scan, shows findings, and exposes downloads', async () 
     const screenshotDirectory = resolve(process.cwd(), 'output', 'playwright');
     await mkdir(screenshotDirectory, { recursive: true });
     const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
-    await page.goto(dashboard.url);
+    await page.goto(`${dashboard.url}/#new-audit`);
     await page.screenshot({ path: join(screenshotDirectory, 'dashboard-empty.png'), fullPage: true });
-    assert.equal(await page.locator('input[name="discovery"][value="gsc"] + .source-check svg').evaluate((node) => getComputedStyle(node).opacity), '1');
-    assert.equal(await page.locator('input[name="discovery"][value="backlinks"] + .source-check svg').evaluate((node) => getComputedStyle(node).opacity), '1');
+    assert.equal(await page.locator('input[name="discovery"][value="google"]').isChecked(), true);
+    assert.equal(await page.locator('input[name="discovery"][value="backlinks"]').isChecked(), false);
     await page.locator('#start-button').click();
     await page.locator('#form-error').filter({ hasText: 'Add at least one' }).waitFor();
 
@@ -31,6 +31,7 @@ test('dashboard starts a scan, shows findings, and exposes downloads', async () 
     await page.locator('#sites').fill(fixture.origin);
     await page.locator('#urls').fill(`${fixture.origin}/hard`);
     await page.locator('#files').setInputFiles(inputFile);
+    await page.locator('[data-preset="import"]').click();
     await page.locator('input[name="discovery"][value="sitemap"]').uncheck();
     await page.locator('input[name="discovery"][value="crawl"]').uncheck();
     await page.locator('#start-button').click();
@@ -55,8 +56,9 @@ test('dashboard starts a scan, shows findings, and exposes downloads', async () 
     await page.screenshot({ path: join(screenshotDirectory, 'dashboard.png'), fullPage: true });
 
     const mobile = await browser.newPage({ viewport: { width: 390, height: 844 } });
-    await mobile.goto(dashboard.url);
+    await mobile.goto(`${dashboard.url}/#audit-workspace`);
     await mobile.locator('#run-view:not(.hidden)').waitFor();
+    await mobile.waitForFunction(() => document.querySelectorAll('#results-body tr').length === 3);
     assert.equal(await mobile.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), true);
     assert.equal(await mobile.locator('#results-body tr').count(), 3);
     await mobile.screenshot({ path: join(screenshotDirectory, 'dashboard-mobile.png'), fullPage: true });
@@ -79,8 +81,9 @@ test('dashboard cancels a running audit, exposes a partial report, and resumes w
   const browser = await chromium.launch({ headless: true });
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
-    await page.goto(dashboard.url);
+    await page.goto(`${dashboard.url}/#new-audit`);
     await page.locator('#urls').fill(Array.from({ length: 4 }, (_, index) => `${fixture.origin}/slow?dashboard=${index}`).join('\n'));
+    await page.locator('[data-preset="import"]').click();
     await page.locator('input[name="discovery"][value="sitemap"]').uncheck();
     await page.locator('input[name="discovery"][value="crawl"]').uncheck();
     await page.locator('.advanced-section summary').click();
@@ -119,7 +122,8 @@ test('dashboard does not carry cleared exact URLs into a later site-only audit',
   const browser = await chromium.launch({ headless: true });
   try {
     const page = await browser.newPage();
-    await page.goto(dashboard.url);
+    await page.goto(`${dashboard.url}/#new-audit`);
+    await page.locator('[data-preset="import"]').click();
     await page.locator('input[name="discovery"][value="sitemap"]').uncheck();
     await page.locator('input[name="discovery"][value="crawl"]').uncheck();
     await page.locator('#urls').fill(`${fixture.origin}/ok\n${fixture.origin}/hard`);
@@ -127,6 +131,7 @@ test('dashboard does not carry cleared exact URLs into a later site-only audit',
     await page.locator('#run-status').filter({ hasText: 'completed' }).waitFor({ timeout: 30_000 });
     const firstRunId = await page.locator('#run-id').innerText();
 
+    await page.locator('[data-view-link="new-audit"]').click();
     await page.locator('#urls').fill('');
     await page.locator('#sites').fill(fixture.origin);
     assert.equal(await page.locator('#urls').inputValue(), '');

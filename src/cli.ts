@@ -1,9 +1,18 @@
 #!/usr/bin/env node
 import { parseArgs } from 'node:util';
+import { createInterface, type Interface } from 'node:readline';
 import open from 'open';
 import { DISCOVERY_SOURCES, type DiscoverySource, type ScanOptions, type StoredScan } from './types.js';
 import { ScanService } from './service.js';
 import { startDashboard } from './server.js';
+
+// Credentials may live in a .env file beside the project. Variables already exported
+// in the shell take precedence, matching how Node's own --env-file behaves.
+try {
+  process.loadEnvFile();
+} catch {
+  // No .env file is the normal case when credentials are exported directly.
+}
 
 const [command = 'help', ...rest] = process.argv.slice(2);
 
@@ -35,7 +44,11 @@ async function scan(args: string[]): Promise<void> {
       site: { type: 'string', multiple: true },
       url: { type: 'string', multiple: true },
       input: { type: 'string', multiple: true },
-      discover: { type: 'string', default: 'all' },
+      discover: { type: 'string' },
+      'google-provider': { type: 'string', default: 'auto' },
+      'google-country': { type: 'string', default: 'gb' },
+      'google-language': { type: 'string', default: 'en' },
+      'google-max-pages': { type: 'string', default: '50' },
       output: { type: 'string' },
       concurrency: { type: 'string', default: '5' },
       'per-host': { type: 'string', default: '2' },
@@ -61,7 +74,11 @@ async function scan(args: string[]): Promise<void> {
       sites: values.site ?? [],
       urls: values.url ?? [],
       inputFiles: values.input ?? [],
-      discovery: parseDiscovery(values.discover),
+      discovery: values.discover ? parseDiscovery(values.discover) : undefined,
+      googleProvider: values['google-provider'] as ScanOptions['googleProvider'],
+      googleCountry: values['google-country'],
+      googleLanguage: values['google-language'],
+      googleMaxPages: numberOption(values['google-max-pages'], 'Google page budget'),
       outputDir: values.output,
       concurrency: numberOption(values.concurrency, 'concurrency'),
       perHostConcurrency: numberOption(values['per-host'], 'per-host'),
@@ -79,13 +96,14 @@ async function scan(args: string[]): Promise<void> {
     };
     const created = service.createScan(options);
     console.log(`Scan ${created.id}`);
-    const unsubscribe = service.onProgress(created.id, printProgress);
+    const unsubscribe = watchProgress(service, created.id);
     const completed = await service.start(created.id);
     unsubscribe();
     console.log(`Status: ${completed.status}`);
     console.log(`Report: ${completed.outputDir}/report.xlsx`);
     if (completed.error) throw new Error(completed.error);
-    if (meetsFailureThreshold(service, completed)) process.exitCode = 2;
+    if (completed.status === 'completed_partial') process.exitCode = 3;
+    else if (meetsFailureThreshold(service, completed)) process.exitCode = 2;
   } finally {
     service.close();
   }
@@ -96,13 +114,14 @@ async function resume(args: string[]): Promise<void> {
   if (!scanId) throw new Error('Usage: seo404 resume <scan-id>');
   const service = new ScanService();
   try {
-    const unsubscribe = service.onProgress(scanId, printProgress);
+    const unsubscribe = watchProgress(service, scanId);
     const completed = await service.resume(scanId);
     unsubscribe();
     console.log(`Status: ${completed.status}`);
     console.log(`Report: ${completed.outputDir}/report.xlsx`);
     if (completed.error) throw new Error(completed.error);
-    if (meetsFailureThreshold(service, completed)) process.exitCode = 2;
+    if (completed.status === 'completed_partial') process.exitCode = 3;
+    else if (meetsFailureThreshold(service, completed)) process.exitCode = 2;
   } finally {
     service.close();
   }
@@ -146,7 +165,7 @@ async function list(): Promise<void> {
 }
 
 function parseDiscovery(value: string | undefined): DiscoverySource[] {
-  if ((value ?? '').trim().toLowerCase() === 'all') return [...DISCOVERY_SOURCES];
+  if ((value ?? '').trim().toLowerCase() === 'all') return ['import', 'sitemap', 'crawl', 'google', 'gsc', 'backlinks'];
   const sources = (value ?? '').split(',').map((item) => item.trim()).filter(Boolean);
   for (const source of sources) {
     if (!DISCOVERY_SOURCES.includes(source as DiscoverySource)) throw new Error(`Unknown discovery source: ${source}`);
@@ -167,6 +186,21 @@ function numberOption(value: string | undefined, label: string): number {
 
 function printProgress(event: { processed: number; total: number; findings: number; message: string }): void {
   console.log(`[${event.processed}/${event.total}; ${event.findings} findings] ${event.message}`);
+}
+
+function watchProgress(service: ScanService, scanId: string): () => void {
+  let prompt: Interface | undefined;
+  const unsubscribe = service.onProgress(scanId, (event) => {
+    printProgress(event);
+    if (event.status === 'waiting_for_google' && process.stdin.isTTY && !prompt) {
+      prompt = createInterface({ input: process.stdin, output: process.stdout });
+      prompt.question('After resolving the Google prompt, press Enter to continue: ', () => {
+        prompt?.close(); prompt = undefined;
+        void service.resume(scanId).catch((error) => console.error(error.message));
+      });
+    }
+  });
+  return () => { prompt?.close(); unsubscribe(); };
 }
 
 function meetsFailureThreshold(service: ScanService, scan: StoredScan): boolean {
@@ -195,7 +229,12 @@ Scan options:
   --site <url>          Site to discover and scan; repeatable
   --url <url>           Exact URL to scan; repeatable
   --input <file>        TXT, CSV, or XLSX file; repeatable
-  --discover <sources>  all, or import,sitemap,crawl,searchapi,gsc,backlinks (default: all)
+  --discover <sources>  google, all, or import,sitemap,crawl,searchapi,gsc,backlinks
+                       Default: google for websites; import for exact URLs/files
+  --google-provider    auto, searchapi, browser (default: auto)
+  --google-country     Google market code (default: gb)
+  --google-language    Google language code (default: en)
+  --google-max-pages   Total search pages per site (default: 50)
   --output <directory>  Output root (default: output/runs)
   --concurrency <n>     Global browser workers (default: 5)
   --per-host <n>        Per-host workers (default: 2)
@@ -206,6 +245,7 @@ Scan options:
   --gsc-days <n>        Search Analytics window (default: 90)
   --backlink-limit <n>  DataForSEO backlink row cap per site (default: 100000)
   --fail-on <level>     hard, soft, or none (default: hard)
+                       Exit codes: 1 failure, 2 findings, 3 incomplete discovery
 
 Opening hours comparison (requires GOOGLE_MAPS_API_KEY; Places API is billed per request):
   --check-hours                   Compare Google and website opening hours per site

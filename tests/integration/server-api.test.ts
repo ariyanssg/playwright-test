@@ -27,7 +27,7 @@ test('localhost API validates requests, secures responses, streams progress, fil
     assert.match(health.headers.get('content-security-policy') ?? '', /default-src 'self'/);
     assert.equal((await health.json() as { ok: boolean }).ok, true);
     const providers = await fetch(`${dashboard.url}/api/providers/status`).then((response) => response.json()) as Record<string, unknown>;
-    assert.deepEqual(providers, { searchApi: true, dataForSeo: true, googleMaps: false });
+    assert.deepEqual(providers, { searchApi: true, googleBrowser: true, googleDefaultProvider: 'searchapi', dataForSeo: true, googleMaps: false });
     assert.doesNotMatch(JSON.stringify(providers), /search-key|backlink-login|backlink-password/);
 
     const googleStatus = await fetch(`${dashboard.url}/api/auth/google/status`).then((response) => response.json()) as { configured: boolean; authenticated: boolean };

@@ -31,6 +31,14 @@ Start the dashboard:
 npm run serve -- --open
 ```
 
+### Credentials
+
+Copy `.env.example` to `.env` and fill in the keys you have. The CLI and dashboard load that file from the working directory at startup; anything already exported in the shell takes precedence over it, and every credential is optional. `.env` is gitignored - keep it that way.
+
+```bash
+cp .env.example .env
+```
+
 It binds only to `http://127.0.0.1:4173`. Scan records and OAuth tokens stay in the operating system's user configuration directory; generated reports default to `output/runs/<scan-id>/`.
 
 ## CLI
@@ -64,13 +72,16 @@ npm run cli -- auth google
 npm run cli -- serve --port 4173 --open
 ```
 
-Run `npm run cli -- help` for every scan option. A submitted restaurant domain defaults to `--discover all`, which combines imports, sitemaps, rendered crawling, Google `site:` results, Search Console, and backlink evidence. Credential-dependent adapters add a visible warning and the local scan continues when they are not configured. The scanner defaults to five workers, at most two active requests per host, a 300 ms host delay, a 30-second navigation timeout, a 10,000-page crawl cap, and a 100,000-row backlink cap per site.
+Run `npm run cli -- help` for every scan option. Website audits default to **Google results only** (`--discover google`). The homepage is a search target, not an automatically added candidate. Google discovery searches five queries, starting with each query's first page, and defaults to UK English with a total budget of 50 search pages per website. Choose `--discover all` for a combined website/search/backlink audit, or `--discover import,sitemap,crawl` for website discovery. Exact URLs and files remain uncapped and default to import-only when no websites are supplied.
+
+The scanner defaults to five workers, at most two active requests per host, a 300 ms host delay, and a 30-second navigation timeout. Crawl and backlink caps apply only when those sources are selected.
 
 CLI exit codes:
 
 - `0`: completed without findings at the selected threshold
 - `1`: configuration or execution failure
 - `2`: completed with findings at the selected `--fail-on hard|soft` threshold
+- `3`: URL verification finished, but Google discovery was incomplete (for example, a page budget or provider failure)
 
 ## Discovery sources
 
@@ -97,16 +108,26 @@ Reads sitemap declarations from `robots.txt`, tries `/sitemap.xml`, follows nest
 
 Uses Chromium to discover links from rendered pages. It stays on the same apex/www site, does not follow robots-disallowed URLs, blocks heavy images/media/fonts, and stops at the configurable crawl cap.
 
-### SearchApi Google `site:` results
-
-Set `SEARCHAPI_API_KEY`, then include `searchapi`:
+### Google search results: API and local browser
 
 ```bash
-export SEARCHAPI_API_KEY="your-key"
-npm run cli -- scan --site https://example.com --discover import,searchapi
+# Default: Auto provider, UK English, 50 search pages per website
+npm run cli -- scan --site https://www.seacontainerslondon.com/
+
+# Browser discovery without a provider key
+npm run cli -- scan --site https://example.com --google-provider browser
+
+# API only, using SEARCHAPI_API_KEY from your environment or local .env
+npm run cli -- scan --site https://example.com --google-provider searchapi --google-country gb --google-language en --google-max-pages 50
 ```
 
-The adapter records result position, title, snippet, and query. SearchApi coverage is capped at 100 results, and Google `site:` results are not a complete index inventory; the report states this limitation.
+Auto uses SearchApi when `SEARCHAPI_API_KEY` is configured, otherwise a dedicated local Chromium browser. API failure switches Auto to the browser and records the reason. Explicit provider choices never silently switch. The legacy `--discover searchapi` remains API-only; `--discover all` invokes unified Google discovery once. API requests consume provider credits.
+
+The five queries are `site:domain`, `site:domain 404`, `site:domain "not found"`, `site:domain "page does not exist"`, and `site:domain intitle:error`. Pagination stops when results end, repeat, or reach the total page budget. Only organic results and sitelinks on the target hostname or its www equivalent become Google candidates. Search links are resolved to the original destination; PDFs and meaningful query strings are preserved. Sitemaps, website links, and guessed paths never count as Google search evidence.
+
+The browser uses its own persistent profile under the local data directory. Google searches are serialized. On a CAPTCHA or consent screen, the audit enters **Waiting for Google**. Resolve the prompt in the browser, then select **Continue** in the dashboard (or press Enter in an interactive CLI). Cancellation saves progress. Resume continues saved query/page checkpoints and completed URL checks, including after a restart. No CAPTCHA solving or bypass is automated.
+
+Each observation retains provider, query, page, position, title, snippet, search URL, country, language, and timestamp. Coverage distinguishes exhausted results, page-budget limits, failures, and explicit empty searches. A failed search is never reported as a clean audit. Google `site:` results remain diagnostic and non-exhaustive; see [Google's limitations](https://developers.google.com/search/docs/monitor-debug/search-operators/all-search-site) and [SearchApi pagination](https://www.searchapi.io/docs/google). Google search result pages currently use pagination rather than `num=100`.
 
 ### Google Search Console
 
@@ -136,15 +157,17 @@ The adapter requests live and lost backlinks in `as_is` mode, follows DataForSEO
 
 `--check-hours` adds a stage that fetches each restaurant's Google opening hours and diffs them against the hours published on its own website.
 
+With `GOOGLE_MAPS_API_KEY` in `.env`:
+
 ```bash
-GOOGLE_MAPS_API_KEY=... npm run cli -- scan \
+npm run cli -- scan \
   --input restaurants.csv \
   --discover import \
   --check-hours \
   --hours-tolerance 15
 ```
 
-**Setup.** Enable **Places API (New)** in Google Cloud and export `GOOGLE_MAPS_API_KEY`. Nothing in this project loads a `.env` file, so the variable must be exported in the shell. Text Search and Place Details are billed per request, and asking for opening hours puts the call in a higher-priced field tier - the stage is off by default for that reason, and issues at most one lookup per unique site.
+**Setup.** Enable **Places API (New)** in Google Cloud and set `GOOGLE_MAPS_API_KEY`, either in a `.env` file in the project root (copy `.env.example`) or exported in the shell. Text Search and Place Details are billed per request, and asking for opening hours puts the call in a higher-priced field tier - the stage is off by default for that reason, and issues at most one lookup per unique site.
 
 **Options.**
 
@@ -174,7 +197,8 @@ Each run produces:
 - `all-urls.csv` containing every completed check
 - `backlinks.csv` containing referring URLs, anchors, provider metrics, and the verified live outcome of every on-site backlink target
 - `hours.csv`, written only when `--check-hours` is used, with one row per restaurant per day
-- `run.json` containing the complete machine-readable job, discovery evidence, results, warnings, and coverage notes
+- `run.json` containing the complete machine-readable job, discovery evidence, results, warnings, and per-query Google checkpoints/coverage
+- Google audits include a **Google Coverage** worksheet in `report.xlsx`; result evidence is also retained in CSV and JSON
 
 The workbook uses typed dates/numbers, filters, frozen headings, URL hyperlinks, status colors, and formula-driven summary counts. Cancelled runs still export a report marked `cancelled`; resuming replaces it with the completed report.
 
@@ -200,4 +224,35 @@ npm run build
 npm audit --audit-level=moderate
 ```
 
-The test suite uses local fixture sites for 404, 410, server- and client-rendered soft 404, redirect, robots, nested/gzip sitemap, SearchApi, opening hours in JSON-LD, microdata and plain text, cancellation/resume, report reconciliation, and dashboard download workflows. External APIs, including Google Places, are exercised against local mock servers through their endpoint overrides. It does not scrape Google result pages or Google Maps directly.
+The test suite uses local fixture sites for 404, 410, server- and client-rendered soft 404, redirect, robots, nested/gzip sitemap, SearchApi, opening hours in JSON-LD, microdata and plain text, cancellation/resume, report reconciliation, and dashboard download workflows. External APIs, including Google Places, are exercised against local mock servers through their endpoint overrides. The automated suite intercepts Google browser pages locally, including redirects, consent/CAPTCHA, empty results, and pagination; live Google validation is performed separately. Google Maps is accessed through Places APIs.
+
+## Dashboard architecture
+
+The dashboard is a local, dependency-free ES module application. Its five routes
+separate the overview, audit setup, findings, history, and optional connections.
+An audit can be bookmarked with `/#audit-workspace?run=<scan-id>`; browser back
+and forward preserve the current form and result filters.
+
+- `src/public/app.js` composes the features and coordinates refreshes.
+- `src/public/modules/api.js` owns HTTP requests and transport errors.
+- `src/public/modules/router.js` owns hash routing, focus, and mobile navigation.
+- `src/public/modules/workspace.js` owns history, overview totals, and activity.
+- `src/public/modules/setup.js` owns input, presets, upload, validation, and submission.
+- `src/public/modules/audit.js` owns scan selection, SSE/polling, results, and evidence.
+- `src/public/modules/connections.js` owns provider readiness and optional features.
+- `src/public/modules/ui.js` contains shared formatting and feedback primitives.
+- `src/public/styles/` separates design tokens, layout, views, and responsive rules.
+
+Search and outcome filtering run in SQLite before results are paginated into
+25-row pages. `GET /api/scans/:id/results` accepts `search`, `classification`,
+`offset`, and `limit` (1–1,000); search covers URLs, page titles, and classification
+reasons. Audit history includes all saved runs. Requests from a previous scan
+selection cannot overwrite the current view. Live results use SSE, with periodic
+reconciliation and retry feedback if the connection drops.
+
+The interface supports keyboard navigation, focus-managed mobile navigation,
+native evidence dialogs, reduced motion, visible validation, and retryable load
+failures. The workspace regression tests cover these flows against isolated
+SQLite databases, including 511 results, more than 50 audits, and layouts from
+320px to 1440px. Existing fixture-site tests verify real Chromium scans,
+report downloads, cancellation, and resume through the redesigned interface.
