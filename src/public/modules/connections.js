@@ -25,5 +25,8 @@ export async function loadConnections() {
   $('#inspect-google').disabled = !google?.authenticated;
   if (!google?.authenticated) $('#inspect-google').checked = false;
   $('#inspect-google').closest('label').querySelector('small').textContent = google?.authenticated ? 'Uses URL Inspection quota only after live verification' : 'Connect Search Console to enable URL Inspection';
-  if (!google || !providers) throw new Error('Some connection statuses could not be loaded. Try again to refresh them.');
+  if (!google || !providers) {
+    const failure = [googleResult, providerResult].find((result) => result.status === 'rejected');
+    throw new Error(`Some connection statuses could not be loaded. ${failure?.reason?.message || 'Try again to refresh them.'}`);
+  }
 }

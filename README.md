@@ -228,6 +228,34 @@ The test suite uses local fixture sites for 404, 410, server- and client-rendere
 
 ## Dashboard architecture
 
+### Netlify deployment
+
+`netlify.toml` builds with `npm run build` and publishes **`dist/public`**.
+Publishing `dist` instead produces a root-page 404 because the dashboard's
+`index.html` is inside its `public` subdirectory.
+
+This publishes the frontend only. Netlify does not run `npm run serve` after
+building. The scanner currently needs a persistent Node 24 process, SQLite
+storage, writable report storage, and Chromium. To run audits online, host that
+backend on a persistent server/container and proxy `/api/*` from Netlify to it.
+The current server binds to loopback and has local-only security assumptions;
+configure authenticated access and the deployment's host before exposing it.
+Do not treat a successful static deploy as a working scanner deployment.
+
+For a linked Netlify site, import the project's local credentials before deploying:
+
+```bash
+npx netlify login
+npx netlify link
+npx netlify env:import .env
+```
+
+Importing `.env` sets Netlify environment variables; it does not upload the file
+as a public asset. Keep `.env` ignored by Git and outside `dist/public`. The
+scanner's credentials also need to be configured on the host actually running
+the backend; Netlify build variables do not automatically reach another host.
+Dashboard JavaScript must never contain API keys.
+
 The dashboard is a local, dependency-free ES module application. Its five routes
 separate the overview, audit setup, findings, history, and optional connections.
 An audit can be bookmarked with `/#audit-workspace?run=<scan-id>`; browser back
