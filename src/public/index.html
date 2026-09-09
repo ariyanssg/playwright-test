@@ -61,7 +61,7 @@
 <path d="M12 7v5l3 2"/>
 </svg>
 <span>Audit history</span>
-<span class=nav-count id=nav-run-count>0</span>
+<span class="nav-count" id="nav-run-count">0</span>
 </a>
 <a href="#connections" data-view-link="connections">
 <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -114,6 +114,12 @@
 </div>
 </div>
 <div class="utility-actions">
+<button class="icon-button command-trigger" id="global-search" type="button" aria-label="Quick actions (Control or Command K)" title="Quick actions (Ctrl/⌘ K)">
+<svg viewBox="0 0 24 24" aria-hidden="true">
+<circle cx="11" cy="11" r="7" />
+<path d="m20 20-3.5-3.5" />
+</svg>
+</button>
 <span class="local-badge">
 <span>
 </span>Local engine</span>
@@ -772,7 +778,7 @@
 </div>
 <i>
 </i>
-                  <div data-stage="comparing_profile"><span>GBP</span><div><b>Profile comparison</b><small>Identity, hours and services</small></div></div>
+                  <div data-stage="comparing_profile"><span aria-hidden="true" class="stage-abbr">GBP</span><b>Profile</b><small>Identity & hours</small></div>
 <div data-stage="reporting">
 <span>
 <svg viewBox="0 0 24 24">
@@ -1055,6 +1061,10 @@ Local browser works without a key. For SearchApi, set <code>SEARCHAPI_API_KEY</c
 </svg>
 </button>
 </div>
+<dialog id="command-palette" class="command-palette" aria-label="Quick actions">
+<form method="dialog"><input id="command-input" type="search" placeholder="Type a command — try 'new audit', 'findings', 'history'…" autocomplete="off" aria-label="Type a command"></form>
+<ul id="command-list" role="listbox" aria-label="Available actions"></ul>
+</dialog>
 <script src="/runtime.js"></script>
 <script type="module" src="/app.js">
 </script>

@@ -25,7 +25,7 @@ export function relativeDate(value) {
   if (minutes < 1440) return `${Math.floor(minutes / 60)}h ago`;
   return new Date(value).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
 }
-export const icon = (name) => `<svg viewBox="0 0 24 24" aria-hidden="true">${({ arrow: '<path d="M5 12h14m-5-5 5 5-5 5"/>', globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a17 17 0 0 1 0 18 17 17 0 0 1 0-18Z"/>', download: '<path d="M12 3v12m0 0 5-5m-5 5-5-5M5 19h14"/>', check: '<path d="m5 12 4 4L19 6"/>', search: '<circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/>', clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>', link: '<path d="m10 13 4-4m-6 6-2 2a4 4 0 0 1-6-6l4-4a4 4 0 0 1 6 0m4 2 2-2a4 4 0 0 1 6 6l-4 4a4 4 0 0 1-6 0"/>', file: '<path d="M5 3h10l4 4v14H5V3Zm10 0v5h4M8 13h8M8 17h5"/>' })[name] || ''}</svg>`;
+export const icon = (name) => `<svg viewBox="0 0 24 24" aria-hidden="true">${({ arrow: '<path d="M5 12h14m-5-5 5 5-5 5"/>', play: '<path d="M8 5v14l11-7Z"/>', refresh: '<path d="M20 12a8 8 0 1 1-2.3-5.6M20 4v5h-5"/>', globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a17 17 0 0 1 0 18 17 17 0 0 1 0-18Z"/>', download: '<path d="M12 3v12m0 0 5-5m-5 5-5-5M5 19h14"/>', check: '<path d="m5 12 4 4L19 6"/>', search: '<circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/>', clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>', link: '<path d="m10 13 4-4m-6 6-2 2a4 4 0 0 1-6-6l4-4a4 4 0 0 1 6 0m4 2 2-2a4 4 0 0 1 6 6l-4 4a4 4 0 0 1-6 0"/>', file: '<path d="M5 3h10l4 4v14H5V3Zm10 0v5h4M8 13h8M8 17h5"/>' })[name] || ''}</svg>`;
 let toastTimer;
 export function notify(message, error = false) {
   clearTimeout(toastTimer);

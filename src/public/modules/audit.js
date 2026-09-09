@@ -32,7 +32,13 @@ export function createAudit(onProgress, onFinished) {
     const refreshProfile = state.summary?.scan.options.checkProfile && !isRunning(progress.status);
     const retryPartial = progress.status === 'completed_partial' && state.summary?.googleDiscovery?.some((item) => item.status === 'failed');
     $('#resume-run').classList.toggle('hidden', !['cancelled', 'failed', 'waiting_for_google'].includes(progress.status) && !retryPartial && !refreshProfile);
-    $('#resume-run').textContent = progress.status === 'waiting_for_google' ? 'Continue' : refreshProfile ? 'Refresh profile audit' : retryPartial ? 'Retry discovery' : 'Resume audit';
+    const resumeLabel = progress.status === 'waiting_for_google' ? 'Continue' : refreshProfile ? 'Refresh profile audit' : retryPartial ? 'Retry discovery' : 'Resume audit';
+    const resumeButton = $('#resume-run');
+    const resumeGlyph = progress.status === 'waiting_for_google' ? 'play' : refreshProfile ? 'refresh' : 'arrow';
+    if (resumeButton.dataset.label !== resumeLabel) {
+      resumeButton.dataset.label = resumeLabel;
+      resumeButton.innerHTML = `${icon(resumeGlyph)}<span>${resumeLabel}</span>`;
+    }
     const stages = ['discovering', 'scanning', ...(state.summary?.scan.options.checkHours ? ['comparing_hours'] : []), ...(state.summary?.scan.options.checkProfile ? ['comparing_profile'] : []), 'reporting'];
     const current = ['completed', 'completed_partial'].includes(progress.status) ? stages.length : stages.indexOf(progress.status === 'waiting_for_google' ? 'discovering' : progress.status);
     $$('.stage-track [data-stage]').forEach((element) => {
