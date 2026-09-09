@@ -19,24 +19,32 @@ import { BrowserScanner } from './scanner.js';
 import type { Candidate, CandidateRecord, DiscoveryEvidence, ScanOptions, ScanProgressEvent, ScanSummary, StoredScan } from './types.js';
 import { normalizeUrl, siteKey, siteOrigin, tryNormalizeUrl } from './urls.js';
 import { writeReports } from './reports.js';
+import { auditProfile, targetKey, type AuditDependencies } from './profile/audit.js';
+import { BusinessProfileConnection } from './profile/providers.js';
+import type { ProfileReport, ProfileTarget } from './profile/model.js';
 
 export class ScanService {
   readonly db: ScanDatabase;
   readonly google: GoogleSearchConsole;
+  readonly gbp = new BusinessProfileConnection();
+  private readonly liveProfiles = new Map<string, { expires: number; reports: Map<string, ProfileReport> }>();
+  private readonly profileExpiry = setInterval(() => {
+    for (const [key, entry] of this.liveProfiles) if (entry.expires <= Date.now()) this.liveProfiles.delete(key);
+  }, 60000).unref();
   readonly robots = new RobotsCache();
   private readonly events = new EventEmitter();
   private readonly active = new Map<string, Promise<StoredScan>>();
   private readonly discoveryControllers = new Map<string, AbortController>();
   private readonly googleWaiters = new Map<string, () => void>();
 
-  constructor(databasePath = join(appDataDir(), 'seo404.sqlite'), private readonly googleProviders: GoogleProviders = defaultGoogleProviders) {
+  constructor(databasePath = join(appDataDir(), 'seo404.sqlite'), private readonly googleProviders: GoogleProviders = defaultGoogleProviders, private readonly profileDependencies: AuditDependencies = {}) {
     this.db = new ScanDatabase(databasePath);
     this.google = new GoogleSearchConsole();
   }
 
   createScan(input: Partial<ScanOptions>): StoredScan {
     const options = mergeScanOptions(input);
-    if (!options.sites.length && !options.urls.length && !options.inputFiles.length) {
+    if (!options.sites.length && !options.urls.length && !options.inputFiles.length && !options.profileTargets.length) {
       throw new Error('Provide at least one --site, URL, or input file');
     }
     const id = makeScanId();
@@ -55,7 +63,7 @@ export class ScanService {
   async resume(scanId: string): Promise<StoredScan> {
     const scan = this.db.getScan(scanId);
     if (!scan) throw new Error(`Unknown scan: ${scanId}`);
-    if (scan.status === 'completed') return scan;
+    if (scan.status === 'completed' && !scan.options.checkProfile) return scan;
     if (this.active.has(scanId)) {
       this.googleWaiters.get(scanId)?.();
       return this.active.get(scanId)!;
@@ -86,7 +94,17 @@ export class ScanService {
   }
 
   close(): void {
+    clearInterval(this.profileExpiry);
+    this.liveProfiles.clear();
     this.db.close();
+  }
+
+  profiles(scanId: string): ProfileReport[] {
+    for (const [key, entry] of this.liveProfiles) if (entry.expires <= Date.now()) this.liveProfiles.delete(key);
+    const stored = this.db.listProfiles(scanId), live = this.liveProfiles.get(scanId)?.reports;
+    const merged = new Map(stored.map(report => [report.targetKey, report]));
+    for (const [key, report] of live || []) merged.set(key, report);
+    return [...merged.values()];
   }
 
   async summary(scanId: string): Promise<ScanSummary> {
@@ -112,6 +130,7 @@ export class ScanService {
       hoursCounts: this.db.hoursStatusCounts(scanId),
       artifacts,
       googleDiscovery: this.db.googleDiscovery(scanId),
+      profiles: this.profiles(scanId),
     };
   }
 
@@ -146,6 +165,12 @@ export class ScanService {
         await this.compareHours(scanId, initial.options);
       }
 
+      if (initial.options.checkProfile) {
+        this.db.updateScan(scanId, { status: 'comparing_profile' });
+        this.emit(scanId, 'Cross-matching restaurant websites and Google Business Profiles');
+        await this.compareProfiles(scanId, initial.options, controller.signal);
+      }
+
       if (!this.db.getScan(scanId)?.cancelRequested && initial.options.inspectGoogle) {
         await this.inspectFindings(scanId);
       }
@@ -163,7 +188,7 @@ export class ScanService {
           this.db.saveGooglePage(scanId, state);
         }
       }
-      const incomplete = googleStates.some((state) => state.status !== 'exhausted');
+      const incomplete = googleStates.some((state) => state.status !== 'exhausted') || this.profiles(scanId).some(report => report.status !== 'completed');
       const failedDiscovery = googleStates.some((state) => state.status === 'failed');
       const noCandidates = this.db.getScan(scanId)!.total === 0;
       const status = cancelled ? 'cancelled' : failedDiscovery && noCandidates ? 'failed' : incomplete ? 'completed_partial' : 'completed';
@@ -176,7 +201,7 @@ export class ScanService {
       };
       await writeReports(this.db, scanId, finalState);
       this.db.updateScan(scanId, { status: finalState.status, completedAt: finalState.completedAt, error: finalState.error });
-      this.emit(scanId, cancelled ? 'Cancelled; partial reports are ready' : status === 'failed' ? finalState.error! : incomplete ? 'URL checks finished; Google discovery is incomplete. Review coverage.' : noCandidates ? 'Google returned no matching URLs for the completed searches. This is not a clean-site verdict.' : 'Scan completed');
+      this.emit(scanId, cancelled ? 'Cancelled; partial reports are ready' : status === 'failed' ? finalState.error! : incomplete ? 'Audit finished with incomplete source coverage. Review the report.' : noCandidates && !initial.options.checkProfile ? 'Google returned no matching URLs for the completed searches. This is not a clean-site verdict.' : 'Scan completed');
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.db.appendWarning(scanId, message);
@@ -335,6 +360,28 @@ export class ScanService {
       }
     } finally {
       await inspector.close();
+    }
+  }
+
+  private async compareProfiles(scanId: string, options: ScanOptions, signal: AbortSignal): Promise<void> {
+    const targets: ProfileTarget[] = [...options.profileTargets];
+    const urls = [...options.sites, ...options.urls];
+    for (const url of urls) if (!targets.some(t => t.url === url)) targets.push({ url });
+    // Read original import rows; candidate URL deduplication must not collapse branches.
+    for (const path of options.inputFiles) for (const row of await importRowsFromFile(resolve(path))) {
+      targets.push({ url: row.url, name: row.name, address: row.address, placeId: row.placeId });
+    }
+    const unique = new Map(targets.map(target => [targetKey(target), target]));
+    const entry = { expires: Date.now() + 3600000, reports: new Map<string, ProfileReport>() };
+    this.liveProfiles.set(scanId, entry);
+    const candidates = this.db.listCandidates(scanId).map(c => c.normalizedUrl);
+    for (const [key, target] of unique) {
+      const old = this.db.listProfiles(scanId).find(r => r.targetKey === key);
+      if (old?.retention === 'durable' && old.status === 'completed') { entry.reports.set(key, old); continue; }
+      const report = await auditProfile(scanId, target, { mode: options.profileMode, pageLimit: options.profilePageLimit, timeoutMs: options.timeoutMs, hostDelayMs: options.hostDelayMs, country: options.googleCountry.toUpperCase(), tolerance: options.profileHoursTolerance, signal }, candidates, { gbp: this.gbp, imported: options.profileEvidence, ...this.profileDependencies });
+      entry.reports.set(key, report); entry.expires = Date.now() + 3600000;
+      this.db.upsertProfile(scanId, report);
+      this.emit(scanId, `Profile ${new URL(target.url).hostname}: ${report.summary.matches} matches, ${report.summary.mismatches} mismatches, ${report.summary.missing} missing, ${report.summary.unknown} unresolved`);
     }
   }
 

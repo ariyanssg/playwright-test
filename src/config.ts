@@ -1,6 +1,7 @@
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { DISCOVERY_SOURCES, type ScanOptions } from './types.js';
+import { validateHttpUrl, validateImports } from './profile/model.js';
 
 export const APP_NAME = 'seo404-auditor';
 
@@ -43,6 +44,12 @@ export function defaultScanOptions(): ScanOptions {
     hoursToleranceMinutes: 15,
     hoursPageLimit: 5,
     hoursRequireVerifiedPlace: false,
+    checkProfile: false,
+    profileMode: 'public',
+    profilePageLimit: 20,
+    profileHoursTolerance: 0,
+    profileTargets: [],
+    profileEvidence: [],
   };
 }
 
@@ -51,7 +58,7 @@ export function mergeScanOptions(input: Partial<ScanOptions>): ScanOptions {
   merged.sites = input.sites ?? [];
   merged.urls = input.urls ?? [];
   merged.inputFiles = input.inputFiles ?? [];
-  merged.discovery = input.discovery ?? (merged.sites.length ? ['google'] : ['import']);
+  merged.discovery = input.discovery ?? (merged.checkProfile ? ['import'] : merged.sites.length ? ['google'] : ['import']);
   if (!Array.isArray(merged.discovery) || !merged.discovery.length || merged.discovery.some((source) => !DISCOVERY_SOURCES.includes(source))) {
     throw new Error('Choose valid discovery sources');
   }
@@ -72,6 +79,19 @@ export function mergeScanOptions(input: Partial<ScanOptions>): ScanOptions {
   merged.backlinkLimit = positiveInteger(merged.backlinkLimit, 'backlink limit');
   merged.hoursToleranceMinutes = nonNegativeInteger(merged.hoursToleranceMinutes, 'hours tolerance');
   merged.hoursPageLimit = positiveInteger(merged.hoursPageLimit, 'hours page limit');
+  if (typeof merged.checkProfile !== 'boolean') throw new Error('checkProfile must be a boolean');
+  if (!['public', 'managed', 'imported'].includes(merged.profileMode)) throw new Error('Profile mode must be public, managed, or imported');
+  merged.profilePageLimit = positiveInteger(merged.profilePageLimit, 'profile page limit');
+  merged.profileHoursTolerance = nonNegativeInteger(merged.profileHoursTolerance, 'profile hours tolerance');
+  merged.profileEvidence = validateImports(merged.profileEvidence);
+  if (!Array.isArray(merged.profileTargets)) throw new Error('profileTargets must be an array');
+  for (const target of merged.profileTargets) {
+    if (!target || typeof target !== 'object') throw new Error('Invalid profile target');
+    validateHttpUrl(target.url);
+    for (const key of ['name', 'address', 'placeId', 'gbpLocation'] as const) if (target[key] !== undefined && (typeof target[key] !== 'string' || target[key]!.length > 2000)) throw new Error(`Invalid target ${key}`);
+    if (target.gbpLocation && !/^locations\/[A-Za-z0-9_-]+$/.test(target.gbpLocation)) throw new Error('GBP location must be locations/{id}');
+  }
+  if (merged.checkProfile && merged.profileMode === 'imported' && !merged.profileEvidence.length) throw new Error('Imported profile mode requires profileEvidence');
   return merged;
 }
 

@@ -55,6 +55,9 @@ async function routeRequest(service: ScanService, port: number, request: Incomin
       googleDefaultProvider: process.env.SEARCHAPI_API_KEY ? 'searchapi' : 'browser',
       dataForSeo: Boolean(process.env.DATAFORSEO_LOGIN && process.env.DATAFORSEO_PASSWORD),
       googleMaps: Boolean(process.env.GOOGLE_MAPS_API_KEY),
+      profileAudit: true,
+      gbpConfigured: service.gbp.configured(),
+      gbpAuthenticated: await service.gbp.authenticated(),
     });
   }
   if (method === 'GET' && url.pathname === '/api/scans') {
@@ -96,6 +99,17 @@ async function routeRequest(service: ScanService, port: number, request: Incomin
   if (method === 'GET' && url.pathname === '/api/google/properties') {
     return json(response, 200, { properties: await service.google.listProperties() });
   }
+  if (method === 'GET' && url.pathname === '/api/auth/gbp/start') {
+    const auth = service.gbp.beginAuth(`http://127.0.0.1:${port}/api/auth/gbp/callback`);
+    response.writeHead(302, { location: auth.url }).end(); return;
+  }
+  if (method === 'GET' && url.pathname === '/api/auth/gbp/callback') {
+    if (!service.gbp.consumeAuthState(url.searchParams.get('state'))) throw new HttpError(400, 'Invalid GBP OAuth state');
+    const code = url.searchParams.get('code'); if (!code) throw new HttpError(400, 'GBP authorization did not return a code');
+    await service.gbp.exchangeCode(code, `http://127.0.0.1:${port}/api/auth/gbp/callback`);
+    response.writeHead(302, { location: '/#connections' }).end(); return;
+  }
+  if (method === 'GET' && url.pathname === '/api/gbp/locations') return json(response, 200, { locations: await service.gbp.locations() });
 
   const scanMatch = url.pathname.match(/^\/api\/scans\/([^/]+)(?:\/(.*))?$/);
   if (scanMatch?.[1]) {
@@ -103,6 +117,7 @@ async function routeRequest(service: ScanService, port: number, request: Incomin
     const action = scanMatch[2] ?? '';
     if (!service.getScan(scanId)) return json(response, 404, { error: 'Unknown scan' });
     if (method === 'GET' && !action) return json(response, 200, await service.summary(scanId));
+    if (method === 'GET' && action === 'profiles') return json(response, 200, { schemaVersion: '1.0', reports: service.profiles(scanId) });
     if (method === 'GET' && action === 'results') {
       const offset = pageNumber(url.searchParams.get('offset'), 0, 0, Number.MAX_SAFE_INTEGER);
       const limit = pageNumber(url.searchParams.get('limit'), 200, 1, 1_000);
@@ -158,7 +173,7 @@ function streamEvents(service: ScanService, scanId: string, request: IncomingMes
 async function serveArtifact(service: ScanService, scanId: string, fileName: string, response: ServerResponse): Promise<void> {
   const scan = service.getScan(scanId);
   if (!scan) return json(response, 404, { error: 'Unknown scan' });
-  const allowed = new Set(['report.xlsx', 'findings.csv', 'all-urls.csv', 'backlinks.csv', 'hours.csv', 'run.json']);
+  const allowed = new Set(['report.xlsx', 'findings.csv', 'all-urls.csv', 'backlinks.csv', 'hours.csv', 'run.json', 'profile-audit.json', 'profile-fields.csv', 'profile-hours.csv', 'profile-links.csv', 'profile-report.html']);
   if (!allowed.has(fileName)) return json(response, 404, { error: 'Unknown artifact' });
   const filePath = join(scan.outputDir, fileName);
   const info = await stat(filePath);
@@ -213,7 +228,7 @@ async function saveUpload(request: IncomingMessage, rawName: string): Promise<st
 
 function json(response: ServerResponse, status: number, value: unknown): void {
   const body = `${JSON.stringify(value)}\n`;
-  response.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'content-length': Buffer.byteLength(body) });
+  response.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'content-length': Buffer.byteLength(body), 'cache-control': 'no-store' });
   response.end(body);
 }
 

@@ -606,6 +606,24 @@
 </label>
                   </details>
                 </section>
+                <section class="profile-setup surface" id="profile-setup">
+                  <label class="inspection-toggle"><input id="check-profile" type="checkbox"><span class="toggle-track"><span></span></span><span><b>Cross-match Google Business Profile</b><small>Compare identity, contact details, hours, menu, reservations and ordering.</small></span></label>
+                  <div id="profile-options" class="hidden">
+                    <p class="muted">The profile audit crawls service and contact pages. Additional URL discovery sources above are optional.</p>
+                    <div class="profile-grid">
+                      <label>Profile source<select id="profile-mode"><option value="public">Public Google Places</option><option value="managed">Connected Business Profile</option><option value="imported">Supplied profile evidence</option></select></label>
+                      <label>Pages per restaurant<input id="profile-pages" type="number" min="1" value="20"></label>
+                      <label>Restaurant name (optional)<input id="profile-name" type="text" placeholder="Trading name"></label>
+                      <label>Branch address (recommended)<input id="profile-address" type="text" placeholder="Street address and postcode"></label>
+                      <label>Google Place ID (optional)<input id="profile-place-id" type="text"></label>
+                      <label>Hours severity tolerance (minutes)<input id="profile-tolerance" type="number" min="0" value="0"><small>Differences remain visible even within tolerance.</small></label>
+                    </div>
+                    <div id="profile-managed" class="hidden"><a href="/api/auth/gbp/start" class="secondary compact">Connect Business Profile</a> <button id="profile-load-locations" type="button" class="secondary compact">Load my locations</button><label>Restaurant location<select id="profile-location"><option value="">Select a managed location</option></select></label></div>
+                    <div id="profile-imported" class="hidden"><label>Profile evidence (JSON array)<textarea id="profile-evidence" rows="7" placeholder='[{"url":"https://example.com","observedAt":"2026-09-09T12:00:00Z","name":"Restaurant","address":"Street and postcode","services":{"menu":[],"reservations":[],"ordering":[]}}]'></textarea></label></div>
+                    <p id="profile-source-note" class="muted">Public Places provides core information. Service URLs need a connected profile or supplied evidence. Google-derived comparisons remain available for one hour in this session; saved reports mark redacted fields.</p>
+                    <p class="muted">Identity hints apply to one restaurant. For multiple branches, import a CSV with URL, name, address and place_id columns.</p>
+                  </div>
+                </section>
                 <div class="form-error" id="form-error" role="alert" aria-live="assertive"></div>
                 </div>
 <aside class="audit-brief surface">
@@ -754,7 +772,8 @@
 </div>
 <i>
 </i>
-                  <div data-stage="reporting">
+                  <div data-stage="comparing_profile"><span>GBP</span><div><b>Profile comparison</b><small>Identity, hours and services</small></div></div>
+<div data-stage="reporting">
 <span>
 <svg viewBox="0 0 24 24">
 <path d="M5 3h10l4 4v14H5V3Z"/>
@@ -845,6 +864,7 @@
 <div class="downloads" id="downloads">
 </div>
 </section>
+                <section id="profile-results" class="profile-results surface hidden" aria-label="Business Profile comparison"></section>
                 <section class="findings-section surface">
                   <div class="table-toolbar">
 <div>

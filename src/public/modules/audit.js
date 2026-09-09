@@ -1,7 +1,8 @@
+import { renderProfiles } from './profile.js';
 import { request, scanPath } from './api.js';
 import { $, $$, escapeHtml as e, number, targetLabel, statusLabel, classificationLabel, sourceLabel, isRunning, icon, safeUrl, notify, showError, debounce } from './ui.js';
 const pageSize = 25;
-const progressCopy = (status) => ({ queued: 'Waiting for the audit engine…', discovering: 'Discovering pages and bringing the evidence together.', waiting_for_google: 'Resolve the CAPTCHA or consent prompt in the Google browser, then choose Continue. Your progress is saved.', scanning: 'Checking pages in a real browser.', comparing_hours: 'Comparing website and Google opening hours.', reporting: 'Preparing your reports.', completed: 'Checks of the discovered URLs are complete. Your evidence and reports are ready.', completed_partial: 'URL checks finished, but Google discovery is incomplete. Review coverage below.', cancelled: 'Audit cancelled. Checked pages are saved; resume whenever you’re ready.', failed: 'This audit needs attention. Review the details below or try resuming.' })[status] || status;
+const progressCopy = (status) => ({ queued: 'Waiting for the audit engine…', discovering: 'Discovering pages and bringing the evidence together.', waiting_for_google: 'Resolve the CAPTCHA or consent prompt in the Google browser, then choose Continue. Your progress is saved.', scanning: 'Checking pages in a real browser.', comparing_profile: 'Comparing restaurant identity, hours and service links.', comparing_hours: 'Comparing website and Google opening hours.', reporting: 'Preparing your reports.', completed: 'Checks of the discovered URLs are complete. Your evidence and reports are ready.', completed_partial: 'Audit finished with incomplete source coverage. Review the report below.', cancelled: 'Audit cancelled. Checked pages are saved; resume whenever you’re ready.', failed: 'This audit needs attention. Review the details below or try resuming.' })[status] || status;
 export function createAudit(onProgress, onFinished) {
   const state = { id: null, generation: 0, summaryVersion: 0, summary: null, items: [], total: 0, page: 0, source: null, poll: null, resultsTimer: null, resultsController: null, resultsError: null, mutating: false };
   function stop() {
@@ -28,10 +29,11 @@ export function createAudit(onProgress, onFinished) {
     $('#progress-orb').setAttribute('aria-label', `${percent}% of discovered URLs checked`);
     $('#checked-caption').textContent = progress.total ? `${percent}% of discovered URLs` : 'Waiting to verify';
     $('#cancel-run').classList.toggle('hidden', !isRunning(progress.status));
+    const refreshProfile = state.summary?.scan.options.checkProfile && !isRunning(progress.status);
     const retryPartial = progress.status === 'completed_partial' && state.summary?.googleDiscovery?.some((item) => item.status === 'failed');
-    $('#resume-run').classList.toggle('hidden', !['cancelled', 'failed', 'waiting_for_google'].includes(progress.status) && !retryPartial);
-    $('#resume-run').textContent = progress.status === 'waiting_for_google' ? 'Continue' : retryPartial ? 'Retry discovery' : 'Resume audit';
-    const stages = ['discovering', 'scanning', ...(state.summary?.scan.options.checkHours ? ['comparing_hours'] : []), 'reporting'];
+    $('#resume-run').classList.toggle('hidden', !['cancelled', 'failed', 'waiting_for_google'].includes(progress.status) && !retryPartial && !refreshProfile);
+    $('#resume-run').textContent = progress.status === 'waiting_for_google' ? 'Continue' : refreshProfile ? 'Refresh profile audit' : retryPartial ? 'Retry discovery' : 'Resume audit';
+    const stages = ['discovering', 'scanning', ...(state.summary?.scan.options.checkHours ? ['comparing_hours'] : []), ...(state.summary?.scan.options.checkProfile ? ['comparing_profile'] : []), 'reporting'];
     const current = ['completed', 'completed_partial'].includes(progress.status) ? stages.length : stages.indexOf(progress.status === 'waiting_for_google' ? 'discovering' : progress.status);
     $$('.stage-track [data-stage]').forEach((element) => {
       const index = stages.indexOf(element.dataset.stage);
@@ -45,6 +47,7 @@ export function createAudit(onProgress, onFinished) {
   }
   function renderSummary(summary) {
     const scan = summary.scan;
+    renderProfiles(summary.profiles || [], scan.options.checkProfile);
     const google = summary.googleDiscovery || [];
     $('#google-coverage').classList.toggle('hidden', !google.length);
     $('#google-coverage').innerHTML = google.length ? `<b>Google search coverage</b>${google.map((item) => `<p><strong>${e(item.site)}</strong> · ${e((item.providersUsed?.length ? item.providersUsed : [item.provider]).map((provider) => provider === 'browser' ? 'Local browser' : 'SearchApi').join(' + '))} · ${e(item.country.toUpperCase())} / ${e(item.language)}<br>${number(item.pagesFetched)} search pages · ${number(item.queries.filter((q) => q.done).length)}/${item.queries.length} queries exhausted · <strong>${e(({ exhausted: 'Available results exhausted', limited: 'Page budget reached — partial coverage', failed: 'Discovery incomplete', waiting: 'Waiting for you', running: 'Searching', cancelled: 'Cancelled — progress saved' })[item.status])}</strong>${item.error ? `<br>${e(item.error)}` : ''}</p>`).join('')}<small>${scan.total === 0 && !isRunning(scan.status) ? 'No URLs were verified. This is not a clean-site verdict. ' : ''}Only observed Google results count as Google evidence. Search results are not a complete index inventory.${google.some((item) => item.status === 'limited') ? ' Create a new audit with a larger page budget for more coverage.' : ''}</small>` : '';
@@ -55,7 +58,7 @@ export function createAudit(onProgress, onFinished) {
     const warnings = [...new Set([...(scan.error ? [scan.error] : []), ...scan.warnings])];
     $('#run-warnings').classList.toggle('hidden', !warnings.length);
     $('#run-warnings').innerHTML = warnings.length ? `<details ${['failed', 'completed_partial'].includes(scan.status) ? 'open' : ''}><summary>${warnings.length} ${warnings.length === 1 ? 'audit note' : 'audit notes'} <span>Review coverage and provider availability</span></summary><ul>${warnings.map((warning) => `<li>${e(warning)}</li>`).join('')}</ul></details>` : '';
-    const order = ['report.xlsx', 'findings.csv', 'all-urls.csv', 'backlinks.csv', 'hours.csv', 'run.json'];
+    const order = ['report.xlsx', 'findings.csv', 'all-urls.csv', 'backlinks.csv', 'hours.csv', 'profile-report.html', 'profile-fields.csv', 'profile-hours.csv', 'profile-links.csv', 'profile-audit.json', 'run.json'];
     const files = order.filter((file) => summary.artifacts.includes(file));
     $('#downloads').innerHTML = files.map((file) => `<a class="${file === 'report.xlsx' ? 'primary-download' : ''}" href="${scanPath(scan.id)}/artifacts/${file}">${icon('download')}<span><span class="sr-only">Download </span>${e(file)}</span></a>`).join('');
     $('#report-center').classList.toggle('report-ready', files.length > 0);
@@ -153,6 +156,7 @@ export function createAudit(onProgress, onFinished) {
     $('#run-target').textContent = 'Loading audit…'; $('#run-id').textContent = id;
     $('#run-warnings').classList.add('hidden'); $('#downloads').innerHTML = '';
     $('#google-coverage').classList.add('hidden');
+    $('#profile-results').classList.add('hidden');
     $('#cancel-run').classList.add('hidden'); $('#resume-run').classList.add('hidden');
     renderRows();
     try { await Promise.all([refresh(), loadResults()]); if (generation === state.generation) connect(); }

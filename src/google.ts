@@ -26,7 +26,7 @@ export class GoogleSearchConsole {
   readonly tokenPath: string;
   private readonly pendingStates = new Set<string>();
 
-  constructor(tokenPath = join(appConfigDir(), 'google-token.json')) {
+  constructor(tokenPath = join(appConfigDir(), 'google-token.json'), private readonly scopes: string[] = SCOPES, private readonly connectionName = 'Google Search Console') {
     this.tokenPath = tokenPath;
   }
 
@@ -56,7 +56,7 @@ export class GoogleSearchConsole {
     return this.createClient(redirectUri).generateAuthUrl({
       access_type: 'offline',
       prompt: 'consent',
-      scope: SCOPES,
+      scope: this.scopes,
     });
   }
 
@@ -66,7 +66,7 @@ export class GoogleSearchConsole {
     const url = this.createClient(redirectUri).generateAuthUrl({
       access_type: 'offline',
       prompt: 'consent',
-      scope: SCOPES,
+      scope: this.scopes,
       state,
     });
     return { url, state };
@@ -140,7 +140,7 @@ export class GoogleSearchConsole {
     try {
       raw = await readFile(this.tokenPath, 'utf8');
     } catch {
-      throw new Error('Google Search Console is not connected. Run: seo404 auth google');
+      throw new Error(`${this.connectionName} is not connected`);
     }
     client.setCredentials(JSON.parse(raw));
     return client;

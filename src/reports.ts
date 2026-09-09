@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import ExcelJS, { type Cell, type Row, type Worksheet } from 'exceljs';
 import { CLASSIFICATIONS, type BacklinkRecord, type CandidateRecord, type Classification, type DayVerdict, type HoursComparisonRecord, type ScanResult, type StoredScan } from './types.js';
 import { DAY_INDEXES, DAY_NAMES } from './hours/schedule.js';
+import { addProfileSheets, writeProfileReports } from './profile/reports.js';
 import type { ScanDatabase } from './database.js';
 import { isActionable } from './database.js';
 
@@ -81,6 +82,7 @@ export async function writeReports(db: ScanDatabase, scanId: string, scanOverrid
   const xlsxPath = join(scan.outputDir, 'report.xlsx');
   const hours = scan.options.checkHours ? db.listHours(scanId) : [];
   const artifacts = [xlsxPath, findingsCsvPath, allCsvPath, backlinksCsvPath, jsonPath];
+  if (scan.options.checkProfile) artifacts.push(...await writeProfileReports(scan.outputDir, db.listProfiles(scanId)));
 
   await writeFile(allCsvPath, toCsv(reportRows), 'utf8');
   await writeFile(findingsCsvPath, toCsv(reportRows.filter((row) => isActionable(row.classification))), 'utf8');
@@ -97,6 +99,7 @@ export async function writeReports(db: ScanDatabase, scanId: string, scanOverrid
     candidates: candidates.map(jsonCandidate),
     backlinks,
     hours,
+    profiles: scan.options.checkProfile ? db.listProfiles(scanId) : [],
     coverage: {
       googleSiteOperator: 'Diagnostic and not exhaustive',
       googleDiscovery: db.googleDiscovery(scanId),
@@ -132,6 +135,7 @@ async function writeWorkbook(filePath: string, db: ScanDatabase, scanId: string,
     ? workbook.addWorksheet('Hours Comparison', { views: [{ state: 'frozen', ySplit: 1, xSplit: 1, showGridLines: false }] })
     : null;
   const sources = workbook.addWorksheet('Sources & Run Info', { views: [{ showGridLines: false }] });
+  if (scan.options.checkProfile) addProfileSheets(workbook, db.listProfiles(scanId));
 
   buildSummary(summary, db, scanId, allResults.length, findings.length, backlinks.length, hours, scan);
   buildResultSheet(broken, findings);

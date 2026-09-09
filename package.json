@@ -27,6 +27,7 @@
     "fast-xml-parser": "^5.11.0",
     "googleapis": "^176.0.0",
     "ipaddr.js": "^2.5.0",
+    "libphonenumber-js": "^1.13.12",
     "open": "^11.0.1",
     "playwright": "^1.62.1",
     "robots-parser": "^3.0.1"

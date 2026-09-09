@@ -13,6 +13,25 @@ export function initSetup(onCreated) {
       if (id === 'concurrency' || id === 'per-host') input.defaultValue = input.value = '1';
     }
   }
+  if (globalThis.SIGNAL404_HOSTED) $('#profile-setup').classList.add('hidden');
+  const profileMode = () => {
+    $('#profile-options').classList.toggle('hidden', !$('#check-profile').checked);
+    $('#profile-managed').classList.toggle('hidden', $('#profile-mode').value !== 'managed');
+    $('#profile-imported').classList.toggle('hidden', $('#profile-mode').value !== 'imported');
+  };
+  $('#check-profile').addEventListener('change', () => {
+    if ($('#check-profile').checked) $$('[name="discovery"]').forEach(input => input.checked = input.value === 'import');
+    profileMode(); update();
+  });
+  $('#profile-mode').addEventListener('change', profileMode);
+  $('#profile-load-locations').addEventListener('click', async () => {
+    const button = $('#profile-load-locations'); button.disabled = true;
+    try {
+      const { locations } = await request('/api/gbp/locations');
+      $('#profile-location').replaceChildren(new Option('Select a managed location', ''), ...locations.map(l => new Option(`${l.title} — ${l.address}`, l.name)));
+      if (!locations.length) notify('No accessible locations were returned.', true);
+    } catch (error) { notify(error.message, true); } finally { button.disabled = false; }
+  });
   let submitting = false;
   function update() {
     const sites = lines($('#sites').value).length, urls = lines($('#urls').value).length, files = [...fileInput.files];
@@ -41,7 +60,7 @@ export function initSetup(onCreated) {
     form.reset();
     $('#form-error').textContent = '';
     if ($('#check-hours').disabled) $('#check-hours').checked = false;
-    update(); notify('Audit setup reset'); $('#sites').focus();
+    profileMode(); update(); notify('Audit setup reset'); $('#sites').focus();
   });
   $$('.preset-bar button').forEach((element) => element.addEventListener('click', () => {
     $$('[name="discovery"]').forEach((input) => { input.checked = presets[element.dataset.preset].includes(input.value); }); update();
@@ -77,6 +96,21 @@ export function initSetup(onCreated) {
     const numericFields = { concurrency: 'concurrency', perHostConcurrency: 'per-host', hostDelayMs: 'host-delay', crawlLimit: 'crawl-limit', timeoutMs: 'timeout', gscDays: 'gsc-days', backlinkLimit: 'backlink-limit', hoursToleranceMinutes: 'hours-tolerance', hoursPageLimit: 'hours-pages' };
     const payload = { sites, urls, discovery, inputFiles: [], googleProvider: $('#google-provider').value, googleCountry: $('#google-country').value, googleLanguage: $('#google-language').value, googleMaxPages: Number($('#google-max-pages').value), inspectGoogle: $('#inspect-google').checked, checkHours: $('#check-hours').checked, hoursRequireVerifiedPlace: false, failOn: 'hard' };
     for (const [key, id] of Object.entries(numericFields)) payload[key] = Number($(`#${id}`).value);
+    if ($('#check-profile').checked && !globalThis.SIGNAL404_HOSTED) {
+      payload.checkProfile = true;
+      payload.profileMode = $('#profile-mode').value;
+      payload.profilePageLimit = Number($('#profile-pages').value);
+      payload.profileHoursTolerance = Number($('#profile-tolerance').value);
+      const name = $('#profile-name').value.trim(), address = $('#profile-address').value.trim(), placeId = $('#profile-place-id').value.trim(), gbpLocation = $('#profile-location').value;
+      if (name || address || placeId || gbpLocation) {
+        if (sites.length + urls.length !== 1 || files.length) { error.textContent = 'Identity hints require one restaurant URL. Use CSV identity columns for multiple branches.'; return; }
+        payload.profileTargets = [{ url: [...sites, ...urls][0], name: name || undefined, address: address || undefined, placeId: placeId || undefined, gbpLocation: gbpLocation || undefined }];
+      }
+      if (payload.profileMode === 'managed' && !gbpLocation) { error.textContent = 'Load and select a connected restaurant location.'; return; }
+      if (payload.profileMode === 'imported') {
+        try { payload.profileEvidence = JSON.parse($('#profile-evidence').value); } catch { error.textContent = 'Profile evidence must be a valid JSON array.'; return; }
+      }
+    }
     submitting = true;
     const original = button.innerHTML;
     const disabled = $$('input, textarea, button, select', form).filter((control) => !control.disabled);

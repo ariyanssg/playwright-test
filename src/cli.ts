@@ -5,6 +5,8 @@ import open from 'open';
 import { DISCOVERY_SOURCES, type DiscoverySource, type ScanOptions, type StoredScan } from './types.js';
 import { ScanService } from './service.js';
 import { startDashboard } from './server.js';
+import { readFile } from 'node:fs/promises';
+import { validateImports } from './profile/model.js';
 
 // Credentials may live in a .env file beside the project. Variables already exported
 // in the shell take precedence, matching how Node's own --env-file behaves.
@@ -27,6 +29,12 @@ try {
     await serve(rest);
   } else if (command === 'auth' && rest[0] === 'google') {
     await authGoogle(rest.slice(1));
+  } else if (command === 'auth' && rest[0] === 'gbp') {
+    const service = new ScanService();
+    try { await service.gbp.authenticateInteractive(); console.log('Google Business Profile connected.'); } finally { service.close(); }
+  } else if (command === 'gbp-locations') {
+    const service = new ScanService();
+    try { console.log(JSON.stringify(await service.gbp.locations(), null, 2)); } finally { service.close(); }
   } else if (command === 'list') {
     await list();
   } else {
@@ -63,6 +71,15 @@ async function scan(args: string[]): Promise<void> {
       'hours-tolerance': { type: 'string', default: '15' },
       'hours-pages': { type: 'string', default: '5' },
       'hours-require-verified-place': { type: 'boolean', default: false },
+      'check-profile': { type: 'boolean', default: false },
+      'profile-mode': { type: 'string', default: 'public' },
+      'profile-pages': { type: 'string', default: '20' },
+      'profile-hours-tolerance': { type: 'string', default: '0' },
+      'profile-evidence': { type: 'string' },
+      'place-id': { type: 'string' },
+      'gbp-location': { type: 'string' },
+      'restaurant-name': { type: 'string' },
+      'restaurant-address': { type: 'string' },
       help: { type: 'boolean', short: 'h' },
     },
     allowPositionals: false,
@@ -93,7 +110,17 @@ async function scan(args: string[]): Promise<void> {
       hoursToleranceMinutes: numberOption(values['hours-tolerance'], 'hours-tolerance'),
       hoursPageLimit: numberOption(values['hours-pages'], 'hours-pages'),
       hoursRequireVerifiedPlace: values['hours-require-verified-place'],
+      checkProfile: values['check-profile'],
+      profileMode: values['profile-mode'] as ScanOptions['profileMode'],
+      profilePageLimit: numberOption(values['profile-pages'], 'profile-pages'),
+      profileHoursTolerance: numberOption(values['profile-hours-tolerance'], 'profile-hours-tolerance'),
+      profileEvidence: values['profile-evidence'] ? validateImports(JSON.parse(await readFile(values['profile-evidence'], 'utf8'))) : [],
     };
+    if (values['place-id'] || values['gbp-location'] || values['restaurant-name'] || values['restaurant-address']) {
+      const urls = [...options.sites!, ...options.urls!];
+      if (urls.length !== 1 || options.inputFiles!.length) throw new Error('Single-restaurant identity flags require exactly one --site or --url; use CSV identity columns for multiple restaurants');
+      options.profileTargets = [{ url: urls[0]!, placeId: values['place-id'], gbpLocation: values['gbp-location'], name: values['restaurant-name'], address: values['restaurant-address'] }];
+    }
     const created = service.createScan(options);
     console.log(`Scan ${created.id}`);
     const unsubscribe = watchProgress(service, created.id);
@@ -101,6 +128,7 @@ async function scan(args: string[]): Promise<void> {
     unsubscribe();
     console.log(`Status: ${completed.status}`);
     console.log(`Report: ${completed.outputDir}/report.xlsx`);
+    for (const report of service.profiles(completed.id)) console.log(`Profile ${report.target.url}: ${JSON.stringify(report.summary)}${report.retention === 'session_only' ? ' — Google evidence is session-only; use the dashboard for side-by-side live values.' : ''}`);
     if (completed.error) throw new Error(completed.error);
     if (completed.status === 'completed_partial') process.exitCode = 3;
     else if (meetsFailureThreshold(service, completed)) process.exitCode = 2;
@@ -206,6 +234,7 @@ function watchProgress(service: ScanService, scanId: string): () => void {
 function meetsFailureThreshold(service: ScanService, scan: StoredScan): boolean {
   const threshold = scan.options.failOn;
   if (threshold === 'none') return false;
+  if (service.profiles(scan.id).some(r => r.summary.mismatches || r.summary.missing || r.summary.equivalent || r.summary.brokenLinks)) return true;
   return service.results(scan.id, 0, Number.MAX_SAFE_INTEGER).items.some((candidate) => {
     const value = candidate.result?.classification;
     if (!value) return false;
@@ -223,9 +252,20 @@ Usage:
   seo404 resume <scan-id>
   seo404 serve [--port 4173] [--open]
   seo404 auth google [--port 4174]
+  seo404 auth gbp
+  seo404 gbp-locations
   seo404 list
 
 Scan options:
+  --check-profile       Cross-match restaurant website and Google profile
+  --profile-mode        public, managed, imported (default: public)
+  --profile-pages       Website discovery budget (default: 20)
+  --profile-hours-tolerance  Severity tolerance; exact match stays strict (default: 0)
+  --profile-evidence    JSON observations file (required in imported mode)
+  --place-id            Google Place ID for one restaurant
+  --gbp-location        Managed locations/{id}; use gbp-locations to list
+  --restaurant-name     Restaurant identity hint for one URL
+  --restaurant-address  Branch street address and postcode
   --site <url>          Site to discover and scan; repeatable
   --url <url>           Exact URL to scan; repeatable
   --input <file>        TXT, CSV, or XLSX file; repeatable

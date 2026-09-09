@@ -156,6 +156,7 @@ export async function hostedRequest(path, options = {}) {
   if (url.pathname === '/api/scans' && options.method !== 'POST') return { scans: (await scans()).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(cleanScan) };
   if (url.pathname === '/api/scans') {
     const supplied = JSON.parse(options.body), id = crypto.randomUUID();
+    if (supplied.checkProfile) throw new Error('Business Profile audits require the local desktop scanner.');
     const opts = { sites: [], urls: [], inputFiles: [], discovery: ['google'], googleProvider: 'searchapi', googleCountry: 'gb', googleLanguage: 'en', googleMaxPages: 50, hoursPageLimit: 5, ...supplied };
     if (opts.discovery.some((s) => !['google', 'searchapi', 'import'].includes(s))) throw new Error('Hosted audits currently support Google results and exact imports. Other discovery providers remain available in the desktop version.');
     if (opts.googleProvider === 'browser' || opts.inspectGoogle) throw new Error('Local Google browser and Search Console inspection are available in the desktop version. Choose SearchApi for hosted discovery.');

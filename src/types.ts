@@ -20,6 +20,7 @@ export type ScanStatus =
   | 'waiting_for_google'
   | 'scanning'
   | 'comparing_hours'
+  | 'comparing_profile'
   | 'reporting'
   | 'completed'
   | 'completed_partial'
@@ -147,6 +148,12 @@ export interface ScanOptions {
   hoursToleranceMinutes: number;
   hoursPageLimit: number;
   hoursRequireVerifiedPlace: boolean;
+  checkProfile: boolean;
+  profileMode: import('./profile/model.js').ProfileMode;
+  profilePageLimit: number;
+  profileHoursTolerance: number;
+  profileTargets: import('./profile/model.js').ProfileTarget[];
+  profileEvidence: import('./profile/model.js').ImportedProfile[];
 }
 
 export interface StoredScan {
@@ -178,6 +185,7 @@ export interface ScanSummary {
   hoursCounts: Partial<Record<HoursComparisonStatus, number>>;
   artifacts: string[];
   googleDiscovery: GoogleDiscoveryState[];
+  profiles?: import('./profile/model.js').ProfileReport[];
 }
 
 export interface GoogleQueryState {

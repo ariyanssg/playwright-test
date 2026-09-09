@@ -2,6 +2,8 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { GoogleDiscoveryState } from './types.js';
+import type { ProfileReport } from './profile/model.js';
+import { durableReport } from './profile/audit.js';
 import { CLASSIFICATIONS, HOURS_COMPARISON_STATUSES, type BacklinkRecord, type Candidate, type CandidateRecord, type Classification, type HoursComparisonRecord, type HoursComparisonStatus, type PlaceMatchConfidence, type ScanOptions, type ScanResult, type StoredScan } from './types.js';
 
 interface ScanRow {
@@ -140,6 +142,12 @@ export class ScanDatabase {
         state_json TEXT NOT NULL,
         PRIMARY KEY (scan_id, site)
       );
+      CREATE TABLE IF NOT EXISTS restaurant_profiles (
+        scan_id TEXT NOT NULL REFERENCES scans(id) ON DELETE CASCADE,
+        target_key TEXT NOT NULL,
+        result_json TEXT NOT NULL,
+        PRIMARY KEY (scan_id, target_key)
+      );
     `);
   }
 
@@ -148,6 +156,14 @@ export class ScanDatabase {
     if (!scan || scan.warnings.includes(warning)) return;
     this.db.prepare('UPDATE scans SET warnings_json = ? WHERE id = ?')
       .run(JSON.stringify([...scan.warnings, warning]), id);
+  }
+
+  upsertProfile(scanId: string, report: ProfileReport): void {
+    this.db.prepare('INSERT OR REPLACE INTO restaurant_profiles(scan_id, target_key, result_json) VALUES (?, ?, ?)').run(scanId, report.targetKey, JSON.stringify(durableReport(report)));
+  }
+
+  listProfiles(scanId: string): ProfileReport[] {
+    return (this.db.prepare('SELECT result_json FROM restaurant_profiles WHERE scan_id = ? ORDER BY target_key').all(scanId) as Array<{result_json:string}>).map(row => JSON.parse(row.result_json) as ProfileReport);
   }
 
   createScan(id: string, options: ScanOptions, outputDir: string): StoredScan {

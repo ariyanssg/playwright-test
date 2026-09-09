@@ -3,8 +3,8 @@ export const $$ = (selector, root = document) => [...root.querySelectorAll(selec
 export const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
 export const number = (value) => Number(value || 0).toLocaleString();
 export const lines = (value) => value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-export const isRunning = (status) => ['queued', 'discovering', 'waiting_for_google', 'scanning', 'comparing_hours', 'reporting'].includes(status);
-export const statusLabel = (status) => ({ queued: 'Queued', discovering: 'Discovering', waiting_for_google: 'Waiting for Google', scanning: 'Verifying', comparing_hours: 'Comparing hours', reporting: 'Reporting', completed: 'Completed', completed_partial: 'Partial discovery', cancelled: 'Cancelled', failed: 'Failed' })[status] || status;
+export const isRunning = (status) => ['queued', 'discovering', 'waiting_for_google', 'scanning', 'comparing_hours', 'comparing_profile', 'reporting'].includes(status);
+export const statusLabel = (status) => ({ queued: 'Queued', discovering: 'Discovering', waiting_for_google: 'Waiting for Google', scanning: 'Verifying', comparing_profile: 'Comparing profile', comparing_hours: 'Comparing hours', reporting: 'Reporting', completed: 'Completed', completed_partial: 'Partial coverage', cancelled: 'Cancelled', failed: 'Failed' })[status] || status;
 export const classificationLabel = (value) => ({ hard_404: 'Hard 404', gone_410: 'Gone 410', soft_404_suspected: 'Soft 404 suspected', redirected: 'Redirected', ok: 'Healthy', server_error: 'Server error', blocked: 'Blocked', timeout: 'Timed out', network_error: 'Network error' })[value] || value;
 export const sourceLabel = (value) => ({ import: 'Import', sitemap: 'Sitemap', crawl: 'Crawl', google: 'Google', searchapi: 'Google · API', google_browser: 'Google · browser', gsc: 'Search Console', backlinks: 'Backlink' })[value] || value;
 export function safeUrl(value) {
