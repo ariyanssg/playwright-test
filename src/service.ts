@@ -3,7 +3,7 @@ import { mkdir, readdir } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { join, resolve } from 'node:path';
 import { appDataDir, defaultOutputDir, mergeScanOptions } from './config.js';
-import { ScanDatabase, isActionable } from './database.js';
+import { ScanDatabase } from './database.js';
 import { discoverCrawl } from './discovery/crawl.js';
 import { discoverBacklinks } from './discovery/backlinks.js';
 import { discoverGoogle, defaultGoogleProviders, type GoogleProviders } from './discovery/google-search.js';
@@ -14,6 +14,7 @@ import { auditSiteHours } from './hours/audit.js';
 import { HoursInspector } from './hours/inspector.js';
 import type { PlaceHints } from './hours/match.js';
 import { selectHoursPages } from './hours/pages.js';
+import { holdBrowser } from './browser.js';
 import { RobotsCache } from './robots.js';
 import { BrowserScanner } from './scanner.js';
 import type { Candidate, CandidateRecord, DiscoveryEvidence, ScanOptions, ScanProgressEvent, ScanSummary, StoredScan } from './types.js';
@@ -110,12 +111,7 @@ export class ScanService {
   async summary(scanId: string): Promise<ScanSummary> {
     const scan = this.db.getScan(scanId);
     if (!scan) throw new Error(`Unknown scan: ${scanId}`);
-    const sourceCounts: ScanSummary['sourceCounts'] = {};
-    for (const candidate of this.db.listCandidates(scanId)) {
-      for (const source of new Set(candidate.sources.map((value) => value.source))) {
-        sourceCounts[source] = (sourceCounts[source] ?? 0) + 1;
-      }
-    }
+    const sourceCounts: ScanSummary['sourceCounts'] = this.db.sourceCounts(scanId);
     let artifacts: string[] = [];
     try {
       artifacts = await readdir(scan.outputDir);
@@ -147,19 +143,21 @@ export class ScanService {
     initial.options = mergeScanOptions(initial.options);
     const controller = new AbortController();
     this.discoveryControllers.set(scanId, controller);
+    // Discovery, scanning, and the hours pass share one Chromium instead of launching three.
+    const releaseBrowser = holdBrowser();
     try {
       this.db.updateScan(scanId, { status: 'discovering', startedAt: initial.startedAt ?? new Date().toISOString(), error: null });
       this.emit(scanId, 'Collecting candidate URLs');
       await this.discover(scanId, initial.options);
 
-      if (!this.db.getScan(scanId)?.cancelRequested) {
+      if (!this.db.isCancelled(scanId)) {
         this.db.updateScan(scanId, { status: 'scanning' });
         this.emit(scanId, 'Checking live pages with Chromium');
         const scanner = new BrowserScanner(this.db, this.robots, initial.options, (event) => this.events.emit(`scan:${scanId}`, event));
         await scanner.scan(scanId, this.db.listCandidates(scanId, 'pending'));
       }
 
-      if (!this.db.getScan(scanId)?.cancelRequested && initial.options.checkHours) {
+      if (!this.db.isCancelled(scanId) && initial.options.checkHours) {
         this.db.updateScan(scanId, { status: 'comparing_hours' });
         this.emit(scanId, 'Comparing Google and website opening hours');
         await this.compareHours(scanId, initial.options);
@@ -171,14 +169,14 @@ export class ScanService {
         await this.compareProfiles(scanId, initial.options, controller.signal);
       }
 
-      if (!this.db.getScan(scanId)?.cancelRequested && initial.options.inspectGoogle) {
+      if (!this.db.isCancelled(scanId) && initial.options.inspectGoogle) {
         await this.inspectFindings(scanId);
       }
 
       this.db.updateScan(scanId, { status: 'reporting' });
       this.emit(scanId, 'Writing XLSX, CSV, and JSON reports');
       await mkdir(initial.outputDir, { recursive: true });
-      const cancelled = Boolean(this.db.getScan(scanId)?.cancelRequested);
+      const cancelled = this.db.isCancelled(scanId);
       const googleStates = this.db.googleDiscovery(scanId);
       if (cancelled) for (const state of googleStates) {
         if (state.status === 'waiting' || state.status === 'running') {
@@ -222,6 +220,7 @@ export class ScanService {
     } finally {
       this.discoveryControllers.delete(scanId);
       this.googleWaiters.delete(scanId);
+      await releaseBrowser();
     }
     return this.db.getScan(scanId)!;
   }
@@ -236,22 +235,24 @@ export class ScanService {
       }
     }
     const seen = new Set<string>();
-    for (const row of imported) {
-      const normalized = tryNormalizeUrl(row.url);
-      if (!normalized || seen.has(normalized)) continue;
-      seen.add(normalized);
-      this.add(scanId, normalized, {
-        source: 'import',
-        restaurantName: row.name,
-        restaurantAddress: row.address,
-        placeId: row.placeId,
-      });
-    }
     const googleOnly = options.discovery.every((source) => ['google', 'searchapi', 'google_browser'].includes(source));
-    for (const rawSite of googleOnly ? [] : options.sites) {
-      const site = normalizeUrl(rawSite);
-      this.add(scanId, site, { source: 'import' });
-    }
+    this.db.transaction(() => {
+      for (const row of imported) {
+        const normalized = tryNormalizeUrl(row.url);
+        if (!normalized || seen.has(normalized)) continue;
+        seen.add(normalized);
+        this.add(scanId, normalized, {
+          source: 'import',
+          restaurantName: row.name,
+          restaurantAddress: row.address,
+          placeId: row.placeId,
+        });
+      }
+      for (const rawSite of googleOnly ? [] : options.sites) {
+        const site = normalizeUrl(rawSite);
+        this.add(scanId, site, { source: 'import' });
+      }
+    });
 
     const siteMap = new Map<string, string>();
     for (const value of [...options.sites, ...imported.map((row) => row.url)]) {
@@ -260,12 +261,12 @@ export class ScanService {
     }
 
     for (const site of siteMap.values()) {
-      if (this.db.getScan(scanId)?.cancelRequested) return;
+      if (this.db.isCancelled(scanId)) return;
       let gscSitemaps: string[] = [];
       if (options.discovery.includes('gsc')) {
         try {
           const result = await this.google.discover(site, options.gscDays);
-          for (const item of result.urls) this.addDiscovered(scanId, item);
+          this.db.transaction(() => { for (const item of result.urls) this.addDiscovered(scanId, item); });
           gscSitemaps = result.sitemapUrls;
         } catch (error) {
           this.warnAdapter(scanId, 'gsc', site, error);
@@ -274,7 +275,7 @@ export class ScanService {
       if (options.discovery.includes('sitemap')) {
         try {
           const result = await discoverSitemaps(site, this.robots, gscSitemaps);
-          for (const item of result.urls) this.addDiscovered(scanId, item);
+          this.db.transaction(() => { for (const item of result.urls) this.addDiscovered(scanId, item); });
           for (const warning of result.warnings) this.db.appendWarning(scanId, `sitemap ${warning}`);
         } catch (error) {
           this.warnAdapter(scanId, 'sitemap', site, error);
@@ -292,8 +293,10 @@ export class ScanService {
         try {
           this.emit(scanId, `Collecting backlink targets for ${siteKey(site)}`);
           const result = await discoverBacklinks(site, options.backlinkLimit ?? 100_000);
-          for (const backlink of result.backlinks) this.db.addBacklink(scanId, backlink);
-          for (const item of result.candidates) this.add(scanId, item.url, item.evidence);
+          this.db.transaction(() => {
+            for (const backlink of result.backlinks) this.db.addBacklink(scanId, backlink);
+            for (const item of result.candidates) this.add(scanId, item.url, item.evidence);
+          });
           this.db.appendWarning(scanId, `${result.coverageNote} Provider cost: $${result.costUsd.toFixed(5)}.`);
         } catch (error) {
           this.warnAdapter(scanId, 'backlinks', site, error);
@@ -301,8 +304,14 @@ export class ScanService {
       }
       if (options.discovery.includes('crawl')) {
         try {
-          const result = await discoverCrawl(site, this.robots, options.crawlLimit, options.timeoutMs, () => Boolean(this.db.getScan(scanId)?.cancelRequested));
-          for (const item of result.urls) this.addDiscovered(scanId, item);
+          const result = await discoverCrawl(site, this.robots, {
+            crawlLimit: options.crawlLimit,
+            timeoutMs: options.timeoutMs,
+            concurrency: options.concurrency,
+            perHostConcurrency: options.perHostConcurrency,
+            hostDelayMs: options.hostDelayMs,
+          }, () => this.db.isCancelled(scanId));
+          this.db.transaction(() => { for (const item of result.urls) this.addDiscovered(scanId, item); });
           for (const warning of result.warnings) this.db.appendWarning(scanId, `crawl ${warning}`);
         } catch (error) {
           this.warnAdapter(scanId, 'crawl', site, error);
@@ -335,11 +344,16 @@ export class ScanService {
       hostDelayMs: options.hostDelayMs,
       timeoutMs: options.timeoutMs,
     });
-    try {
-      for (const [key, site] of sites) {
-        if (this.db.getScan(scanId)?.cancelRequested) return;
-        // A resumed scan must never pay for the same Places lookup twice.
-        if (this.db.hasHours(scanId, key)) continue;
+    // Distinct sites are distinct hosts, so they can be audited together; per-host pacing
+    // inside the inspector still governs how hard any one restaurant is hit.
+    const pending = [...sites].filter(([key]) => !this.db.hasHours(scanId, key));
+    let next = 0;
+    const worker = async (): Promise<void> => {
+      for (;;) {
+        if (this.db.isCancelled(scanId)) return;
+        const entry = pending[next++];
+        if (!entry) return;
+        const [key, site] = entry;
         try {
           const record = await auditSiteHours({
             site,
@@ -358,6 +372,10 @@ export class ScanService {
           this.warnAdapter(scanId, 'hours', site, error);
         }
       }
+    };
+    try {
+      const workers = Math.max(1, Math.min(options.concurrency, pending.length));
+      await Promise.all(Array.from({ length: workers }, worker));
     } finally {
       await inspector.close();
     }
@@ -374,7 +392,7 @@ export class ScanService {
     const unique = new Map(targets.map(target => [targetKey(target), target]));
     const entry = { expires: Date.now() + 3600000, reports: new Map<string, ProfileReport>() };
     this.liveProfiles.set(scanId, entry);
-    const candidates = this.db.listCandidates(scanId).map(c => c.normalizedUrl);
+    const candidates = this.db.listCandidateUrls(scanId);
     for (const [key, target] of unique) {
       const old = this.db.listProfiles(scanId).find(r => r.targetKey === key);
       if (old?.retention === 'durable' && old.status === 'completed') { entry.reports.set(key, old); continue; }
@@ -391,16 +409,16 @@ export class ScanService {
       this.googleWaiters.set(scanId, resolve);
       this.db.updateScan(scanId, { status: 'waiting_for_google' });
       this.emit(scanId, message);
-      if (this.db.getScan(scanId)?.cancelRequested) resolve();
+      if (this.db.isCancelled(scanId)) resolve();
     });
     this.googleWaiters.delete(scanId);
-    if (!this.db.getScan(scanId)?.cancelRequested) this.db.updateScan(scanId, { status: 'discovering' });
+    if (!this.db.isCancelled(scanId)) this.db.updateScan(scanId, { status: 'discovering' });
   }
 
   private async inspectFindings(scanId: string): Promise<void> {
-    const candidates = this.db.listCandidates(scanId).filter((candidate) => candidate.result && isActionable(candidate.result.classification));
+    const candidates = this.db.listActionableCandidates(scanId);
     for (const candidate of candidates) {
-      if (this.db.getScan(scanId)?.cancelRequested) return;
+      if (this.db.isCancelled(scanId)) return;
       try {
         const result = candidate.result!;
         result.gsc = await this.google.inspect(result.normalizedUrl);
@@ -431,19 +449,9 @@ export class ScanService {
   }
 
   private emit(scanId: string, message: string): void {
-    const scan = this.db.getScan(scanId);
-    if (!scan) return;
-    this.events.emit(`scan:${scanId}`, {
-      scanId,
-      status: scan.status,
-      total: scan.total,
-      processed: scan.processed,
-      findings: scan.findings,
-      backlinkCount: this.db.backlinkCount(scanId),
-      hoursChecked: this.db.hoursCount(scanId),
-      hoursMismatches: this.db.hoursMismatchCount(scanId),
-      message,
-    } satisfies ScanProgressEvent);
+    const counts = this.db.progressCounts(scanId);
+    if (!counts) return;
+    this.events.emit(`scan:${scanId}`, { scanId, ...counts, message } satisfies ScanProgressEvent);
   }
 }
 

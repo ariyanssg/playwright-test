@@ -1,12 +1,36 @@
 import { setTimeout as delay } from 'node:timers/promises';
 import { randomUUID } from 'node:crypto';
-import { chromium, errors, type Browser, type BrowserContext, type Page, type Request, type Response } from 'playwright';
+import { errors, type Browser, type BrowserContext, type Page, type Request, type Response } from 'playwright';
+import { acquireBrowser, releaseBrowser } from './browser.js';
 import { classifyPage, makeBaseline, type MissingBaseline, type PageSignals } from './classifier.js';
 import type { ScanDatabase } from './database.js';
 import { isActionable } from './database.js';
 import type { CandidateRecord, RedirectHop, ScanProgressEvent, ScanResult } from './types.js';
 import type { RobotsCache } from './robots.js';
 import { AUDITOR_USER_AGENT } from './robots.js';
+
+/**
+ * Resource types that never change a missing-page verdict. Styles are included because every
+ * signal the classifier reads comes from `textContent`, which ignores CSS.
+ */
+const BLOCKED_RESOURCES = new Set(['image', 'media', 'font', 'stylesheet']);
+/** Trackers and ad exchanges: pure latency on a page we only read text from. */
+const BLOCKED_HOSTS = /(?:^|\.)(?:google-analytics\.com|googletagmanager\.com|doubleclick\.net|googlesyndication\.com|facebook\.net|connect\.facebook\.com|hotjar\.com|clarity\.ms|segment\.(?:io|com)|mixpanel\.com|intercom\.io|fullstory\.com|newrelic\.com|criteo\.com|taboola\.com|outbrain\.com)$/i;
+
+/** Applies the shared blocking policy to a context so page loads carry only what we read. */
+export async function blockUnreadResources(context: BrowserContext): Promise<void> {
+  await context.route('**/*', (route) => {
+    const request = route.request();
+    if (BLOCKED_RESOURCES.has(request.resourceType())) return route.abort();
+    let host = '';
+    try {
+      host = new URL(request.url()).hostname;
+    } catch {
+      return route.continue();
+    }
+    return BLOCKED_HOSTS.test(host) ? route.abort() : route.continue();
+  });
+}
 
 interface RenderedPage extends PageSignals {
   requestedUrl: string;
@@ -17,6 +41,8 @@ interface RenderedPage extends PageSignals {
   responseMs: number;
   retryAfterMs: number;
 }
+
+const PROGRESS_REFRESH_MS = 400;
 
 export interface ScannerOptions {
   concurrency: number;
@@ -30,6 +56,8 @@ export class BrowserScanner {
   private context: BrowserContext | null = null;
   private readonly baselineCache = new Map<string, Promise<MissingBaseline | null>>();
   private readonly limiter: HostLimiter;
+  private counts: NonNullable<ReturnType<ScanDatabase['progressCounts']>> | null = null;
+  private countsReadAt = 0;
 
   constructor(
     private readonly db: ScanDatabase,
@@ -42,17 +70,13 @@ export class BrowserScanner {
 
   async scan(scanId: string, candidates: CandidateRecord[]): Promise<void> {
     if (!candidates.length) return;
-    this.browser = await chromium.launch({ headless: true });
+    this.browser = await acquireBrowser();
     this.context = await this.browser.newContext({
       userAgent: AUDITOR_USER_AGENT,
       serviceWorkers: 'block',
       ignoreHTTPSErrors: false,
     });
-    await this.context.route('**/*', async (route) => {
-      const resource = route.request().resourceType();
-      if (resource === 'image' || resource === 'media' || resource === 'font') await route.abort();
-      else await route.continue();
-    });
+    await blockUnreadResources(this.context);
 
     let nextIndex = 0;
     const workerCount = Math.min(this.options.concurrency, candidates.length);
@@ -60,24 +84,13 @@ export class BrowserScanner {
       const page = await this.context!.newPage();
       try {
         for (;;) {
-          if (this.db.getScan(scanId)?.cancelRequested) return;
+          if (this.db.isCancelled(scanId)) return;
           const candidate = candidates[nextIndex++];
           if (!candidate) return;
           this.db.markCandidateRunning(scanId, candidate.normalizedUrl);
           const result = await this.scanCandidate(page, candidate);
           this.db.saveResult(scanId, result);
-          const scan = this.db.getScan(scanId)!;
-          this.progress({
-            scanId,
-            status: 'scanning',
-            total: scan.total,
-            processed: scan.processed,
-            findings: scan.findings,
-            backlinkCount: this.db.backlinkCount(scanId),
-            hoursChecked: this.db.hoursCount(scanId),
-            hoursMismatches: this.db.hoursMismatchCount(scanId),
-            message: `${result.classification}: ${result.normalizedUrl}`,
-          });
+          this.report(scanId, result);
         }
       } finally {
         await page.close();
@@ -88,14 +101,41 @@ export class BrowserScanner {
       await Promise.all(workers);
     } finally {
       await this.context.close();
-      await this.browser.close();
       this.context = null;
       this.browser = null;
+      await releaseBrowser();
     }
   }
 
+  /**
+   * Emits progress for every URL but re-reads the counters at most once per tick: the counter
+   * query is synchronous, so polling it per URL stole time from the browser workers.
+   */
+  private report(scanId: string, result: ScanResult): void {
+    const now = Date.now();
+    if (!this.counts || now - this.countsReadAt >= PROGRESS_REFRESH_MS) {
+      this.counts = this.db.progressCounts(scanId);
+      this.countsReadAt = now;
+    } else {
+      this.counts.processed += 1;
+      if (isActionable(result.classification)) this.counts.findings += 1;
+    }
+    if (!this.counts) return;
+    this.progress({
+      scanId,
+      ...this.counts,
+      status: 'scanning',
+      message: `${result.classification}: ${result.normalizedUrl}`,
+    });
+  }
+
   private async scanCandidate(page: Page, candidate: CandidateRecord): Promise<ScanResult> {
-    const host = new URL(candidate.normalizedUrl).host;
+    const url = new URL(candidate.normalizedUrl);
+    const host = url.host;
+    // Read robots first (it is cached per origin) so a declared crawl-delay paces this request
+    // rather than the one after it.
+    const robots = await this.robots.get(candidate.normalizedUrl);
+    this.limiter.slowHost(host, robots.crawlDelayMs);
     let rendered: RenderedPage | null = null;
     for (let attempt = 0; attempt < 2; attempt += 1) {
       rendered = await this.limiter.run(host, () => renderPage(page, candidate.normalizedUrl, this.options.timeoutMs));
@@ -103,9 +143,8 @@ export class BrowserScanner {
       await delay(Math.max(500, rendered.retryAfterMs || 1_000 * (attempt + 1)));
     }
     rendered ??= networkFailure(candidate.normalizedUrl, 'Unknown navigation failure');
-    const robots = await this.robots.get(candidate.normalizedUrl);
     const baseline = rendered.status && rendered.status >= 200 && rendered.status < 300 && /html/i.test(rendered.contentType ?? '')
-      ? await this.getBaseline(new URL(candidate.normalizedUrl).origin)
+      ? await this.getBaseline(url.origin)
       : null;
     const decision = classifyPage(rendered, baseline);
     return {
@@ -152,26 +191,39 @@ export class BrowserScanner {
   }
 }
 
+/** Text long enough that a settle wait is unlikely to change the verdict. */
+const SETTLED_TEXT_CHARS = 400;
+
+const readSignals = () => {
+  const main = document.querySelector('main, [role="main"], article') ?? document.body;
+  return {
+    title: document.title || '',
+    h1: document.querySelector('h1')?.textContent?.trim() || '',
+    mainText: (main?.textContent || '').replace(/\s+/g, ' ').trim(),
+    canonical: document.querySelector<HTMLLinkElement>('link[rel="canonical"]')?.href || null,
+  };
+};
+
+const emptySignals = { title: '', h1: '', mainText: '', canonical: null as string | null };
+
 export async function renderPage(page: Page, url: string, timeoutMs: number): Promise<RenderedPage> {
   const started = performance.now();
   try {
     const response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: timeoutMs });
-    await page.waitForTimeout(Math.min(750, Math.max(250, Math.floor(timeoutMs / 4))));
     const responseMs = Math.round(performance.now() - started);
     if (!response) return networkFailure(url, 'Navigation returned no main-document response', responseMs);
-    const content = await page.evaluate(() => {
-      const main = document.querySelector('main, [role="main"], article') ?? document.body;
-      return {
-        title: document.title || '',
-        h1: document.querySelector('h1')?.textContent?.trim() || '',
-        mainText: (main?.textContent || '').replace(/\s+/g, ' ').trim(),
-        canonical: document.querySelector<HTMLLinkElement>('link[rel="canonical"]')?.href || null,
-      };
-    }).catch(() => ({ title: '', h1: '', mainText: '', canonical: null }));
+    let content = await page.evaluate(readSignals).catch(() => emptySignals);
+    // The settle wait only exists for client-rendered pages. A non-2xx status is already
+    // decided by the classifier, and a page that arrived with its copy has nothing to wait for.
+    const status = response.status();
+    if (status >= 200 && status < 300 && content.mainText.length < SETTLED_TEXT_CHARS) {
+      await page.waitForTimeout(Math.min(750, Math.max(250, Math.floor(timeoutMs / 4))));
+      content = await page.evaluate(readSignals).catch(() => content);
+    }
     const headers = response.headers();
     return {
       requestedUrl: url,
-      status: response.status(),
+      status,
       title: content.title,
       h1: content.h1,
       mainText: content.mainText,
@@ -303,8 +355,13 @@ class HostGate {
   private pace: Promise<void> = Promise.resolve();
   private lastStarted = 0;
 
-  constructor(limit: number, private readonly delayMs: number) {
+  constructor(limit: number, private delayMs: number) {
     this.semaphore = new Semaphore(limit);
+  }
+
+  /** A host that asks for more room in robots.txt gets it; it can never ask for less. */
+  slowTo(delayMs: number): void {
+    if (delayMs > this.delayMs) this.delayMs = delayMs;
   }
 
   async run<T>(operation: () => Promise<T>): Promise<T> {
@@ -330,12 +387,21 @@ export class HostLimiter {
   constructor(private readonly perHost: number, private readonly delayMs: number) {}
 
   run<T>(host: string, operation: () => Promise<T>): Promise<T> {
+    return this.gate(host).run(operation);
+  }
+
+  /** Widens the pacing for one host, used to honour a robots.txt crawl-delay. */
+  slowHost(host: string, delayMs: number | null): void {
+    if (delayMs) this.gate(host).slowTo(delayMs);
+  }
+
+  private gate(host: string): HostGate {
     let gate = this.gates.get(host);
     if (!gate) {
       gate = new HostGate(this.perHost, this.delayMs);
       this.gates.set(host, gate);
     }
-    return gate.run(operation);
+    return gate;
   }
 }
 

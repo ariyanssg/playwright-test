@@ -1,4 +1,5 @@
-import { chromium, type Browser, type BrowserContext } from 'playwright';
+import { type Browser, type BrowserContext } from 'playwright';
+import { acquireBrowser, releaseBrowser } from '../browser.js';
 import { AUDITOR_USER_AGENT } from '../robots.js';
 import { HostLimiter } from '../scanner.js';
 import { harvestHours } from './harvest.js';
@@ -18,24 +19,30 @@ export class HoursInspector {
   private browser: Browser | null = null;
   private context: BrowserContext | null = null;
   private readonly limiter: HostLimiter;
+  private opening: Promise<void> | null = null;
 
   constructor(private readonly options: HoursInspectorOptions) {
     this.limiter = new HostLimiter(options.perHostConcurrency, options.hostDelayMs);
   }
 
+  /** Idempotent under concurrent callers: several sites may start inspecting at once. */
   async open(): Promise<void> {
-    if (this.context) return;
-    this.browser = await chromium.launch({ headless: true });
-    this.context = await this.browser.newContext({
-      userAgent: AUDITOR_USER_AGENT,
-      serviceWorkers: 'block',
-      ignoreHTTPSErrors: false,
-    });
-    await this.context.route('**/*', async (route) => {
-      const resource = route.request().resourceType();
-      if (resource === 'image' || resource === 'media' || resource === 'font') await route.abort();
-      else await route.continue();
-    });
+    this.opening ??= (async () => {
+      const browser = await acquireBrowser();
+      const context = await browser.newContext({
+        userAgent: AUDITOR_USER_AGENT,
+        serviceWorkers: 'block',
+        ignoreHTTPSErrors: false,
+      });
+      // Hours are read from innerText, so styles must load; only unread media is dropped.
+      await context.route('**/*', (route) => {
+        const resource = route.request().resourceType();
+        return ['image', 'media', 'font'].includes(resource) ? route.abort() : route.continue();
+      });
+      this.browser = browser;
+      this.context = context;
+    })();
+    await this.opening;
   }
 
   async inspect(urls: readonly string[]): Promise<WebsiteHoursExtraction> {
@@ -60,9 +67,13 @@ export class HoursInspector {
   }
 
   async close(): Promise<void> {
+    if (!this.opening) return;
+    await this.opening.catch(() => undefined);
+    this.opening = null;
+    const started = Boolean(this.browser);
     await this.context?.close();
-    await this.browser?.close();
     this.context = null;
     this.browser = null;
+    if (started) await releaseBrowser();
   }
 }

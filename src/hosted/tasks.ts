@@ -5,7 +5,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { classifyPage, makeBaseline } from '../classifier.js';
-import { renderPage } from '../scanner.js';
+import { blockUnreadResources, renderPage } from '../scanner.js';
 import { AUDITOR_USER_AGENT } from '../robots.js';
 import { fetchSearchApiPage } from '../discovery/searchapi.js';
 import { googleQueries } from '../discovery/google-results.js';
@@ -42,7 +42,9 @@ export async function hostedTask(body: any, env: Env) {
     downloadsPath: join(profile, 'downloads'), proxy: { server: proxy.server, bypass: '<-loopback>' },
   }).catch(async (error) => { await proxy.close(); await rm(profile, { recursive: true, force: true }); throw error; });
   try {
-    await context.route('**/*', async (route) => ['image', 'media', 'font'].includes(route.request().resourceType()) ? route.abort() : route.continue());
+    // Hours extraction reads innerText and needs styles; a 404 check does not.
+    if (body.action === 'hours-page') await context.route('**/*', (route) => ['image', 'media', 'font'].includes(route.request().resourceType()) ? route.abort() : route.continue());
+    else await blockUnreadResources(context);
     const page = await context.newPage();
     if (body.action === 'hours-page') {
       const harvested = await harvestHours(page, url.href, 12_000);

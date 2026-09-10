@@ -58,9 +58,9 @@ async function scan(args: string[]): Promise<void> {
       'google-language': { type: 'string', default: 'en' },
       'google-max-pages': { type: 'string', default: '50' },
       output: { type: 'string' },
-      concurrency: { type: 'string', default: '5' },
-      'per-host': { type: 'string', default: '2' },
-      'host-delay': { type: 'string', default: '300' },
+      concurrency: { type: 'string', default: '10' },
+      'per-host': { type: 'string', default: '4' },
+      'host-delay': { type: 'string', default: '250' },
       'crawl-limit': { type: 'string', default: '10000' },
       timeout: { type: 'string', default: '30000' },
       'inspect-google': { type: 'boolean', default: false },
@@ -276,9 +276,9 @@ Scan options:
   --google-language    Google language code (default: en)
   --google-max-pages   Total search pages per site (default: 50)
   --output <directory>  Output root (default: output/runs)
-  --concurrency <n>     Global browser workers (default: 5)
-  --per-host <n>        Per-host workers (default: 2)
-  --host-delay <ms>     Delay between host requests (default: 300)
+  --concurrency <n>     Global browser workers (default: 10)
+  --per-host <n>        Per-host workers (default: 4)
+  --host-delay <ms>     Delay between host requests (default: 250)
   --crawl-limit <n>     Per-site crawl cap (default: 10000)
   --timeout <ms>        Navigation timeout (default: 30000)
   --inspect-google      Inspect actionable findings in Search Console

@@ -31,9 +31,12 @@ export function defaultScanOptions(): ScanOptions {
     googleCountry: 'gb',
     googleLanguage: 'en',
     googleMaxPages: 50,
-    concurrency: 5,
-    perHostConcurrency: 2,
-    hostDelayMs: 300,
+    // Sized for throughput on a machine that is not otherwise busy. Per-host limits still
+    // govern how hard any single restaurant site is hit, and a robots.txt crawl-delay widens
+    // the pacing further for the hosts that ask for it.
+    concurrency: 10,
+    perHostConcurrency: 4,
+    hostDelayMs: 250,
     crawlLimit: 10_000,
     timeoutMs: 30_000,
     inspectGoogle: false,

@@ -23,7 +23,8 @@ test('sitemap discovery reads robots, nested indexes, gzip, and same-site URLs',
 test('rendered crawl finds same-site links but does not visit robots-disallowed paths', async () => {
   const fixture = await startFixtureSite();
   try {
-    const result = await discoverCrawl(fixture.origin, new RobotsCache(), 20, 4_000);
+    const crawlOptions = { timeoutMs: 4_000, concurrency: 4, perHostConcurrency: 2, hostDelayMs: 0 };
+    const result = await discoverCrawl(fixture.origin, new RobotsCache(), { ...crawlOptions, crawlLimit: 20 });
     const paths = new Set(result.urls.map((item) => new URL(item.url).pathname));
     assert.ok(paths.has('/ok'));
     assert.ok(paths.has('/hard'));
@@ -31,7 +32,7 @@ test('rendered crawl finds same-site links but does not visit robots-disallowed 
     assert.ok(result.visitedPages >= 4);
     assert.equal(fixture.requestCount('/private'), 0, 'robots-disallowed links are retained but never crawled');
 
-    const capped = await discoverCrawl(fixture.origin, new RobotsCache(), 2, 4_000);
+    const capped = await discoverCrawl(fixture.origin, new RobotsCache(), { ...crawlOptions, crawlLimit: 2 });
     assert.equal(capped.visitedPages, 2);
     assert.match(capped.warnings.join(' '), /configured 2 page limit/);
   } finally {
