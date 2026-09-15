@@ -27,7 +27,12 @@ test('localhost API validates requests, secures responses, streams progress, fil
     assert.match(health.headers.get('content-security-policy') ?? '', /default-src 'self'/);
     assert.equal((await health.json() as { ok: boolean }).ok, true);
     const providers = await fetch(`${dashboard.url}/api/providers/status`).then((response) => response.json()) as Record<string, unknown>;
-    assert.deepEqual(providers, { searchApi: true, googleBrowser: true, googleDefaultProvider: 'searchapi', dataForSeo: true, googleMaps: false });
+    // Asserted field by field: adding a provider must not break an unrelated API contract test.
+    for (const [key, value] of Object.entries({ searchApi: true, googleBrowser: true, googleDefaultProvider: 'searchapi', dataForSeo: true, googleMaps: false, profileAudit: true })) {
+      assert.equal(providers[key], value, `providers.${key}`);
+    }
+    assert.equal(typeof providers.gbpConfigured, 'boolean');
+    assert.equal(providers.gbpAuthenticated, false);
     assert.doesNotMatch(JSON.stringify(providers), /search-key|backlink-login|backlink-password/);
 
     const googleStatus = await fetch(`${dashboard.url}/api/auth/google/status`).then((response) => response.json()) as { configured: boolean; authenticated: boolean };

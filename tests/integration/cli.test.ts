@@ -12,6 +12,10 @@ test('CLI enforces configuration errors and fail-on exit codes while keeping sec
   const environment = {
     ...process.env,
     SEO404_DATA_DIR: join(directory, 'data'),
+    // The CLI loads the project .env at startup, and loadEnvFile never overwrites a variable
+    // that is already set. Pinning the client id to empty keeps the missing-credential
+    // assertion below true whatever real credentials the developer has configured locally.
+    GOOGLE_CLIENT_ID: '',
     GOOGLE_CLIENT_SECRET: 'must-not-leak-google-secret',
     SEARCHAPI_API_KEY: 'must-not-leak-searchapi-secret',
     DATAFORSEO_LOGIN: 'must-not-leak-backlink-login',

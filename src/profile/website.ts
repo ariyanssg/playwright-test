@@ -171,9 +171,18 @@ export class ProfileBrowser {
         const bookingReady = /date|time|guests|party|people|covers/i.test(content.forms.join(' ')) && /reserv|book|table/i.test(scopedText);
         const orderReady = /add to (?:basket|cart)|choose (?:delivery|collection)|start (?:your )?order|checkout|view basket/i.test(content.body);
         result.serviceReady = link.service === 'website' ? content.body.trim().length > 20 : link.service === 'menu' ? menuReady : link.service === 'reservations' ? bookingReady : orderReady;
-        result.health = result.correctBranch === false ? 'wrong_location' : result.serviceReady && result.correctBranch === true ? 'functional' : /temporarily unavailable|not accepting (?:orders|reservations)/i.test(content.body) ? 'temporarily_unavailable' : content.frames.length ? 'unverified' : 'wrong_destination';
+        // A confirmed branch that served a real page is never a broken destination. When the
+        // service interface cannot be recognized there, the page is unverified, not wrong:
+        // calling a restaurant's own working menu page "wrong destination" is a false alarm.
+        result.health = result.correctBranch === false ? 'wrong_location'
+          : result.serviceReady && result.correctBranch === true ? 'functional'
+          : /temporarily unavailable|not accepting (?:orders|reservations)/i.test(content.body) ? 'temporarily_unavailable'
+          : result.correctBranch === true || content.frames.length ? 'unverified'
+          : 'wrong_destination';
       }
-      result.reason = result.health === 'functional' ? 'Correct restaurant and service interface observed; no transaction submitted' : `${result.health.replaceAll('_', ' ')}; HTTP ${status ?? 'unknown'}, service readiness ${result.serviceReady ?? 'unknown'}, branch ${result.correctBranch ?? 'unknown'}`;
+      result.reason = result.health === 'functional' ? 'Correct restaurant and service interface observed; no transaction submitted'
+        : result.health === 'unverified' && result.correctBranch === true ? `Reached the correct restaurant (HTTP ${status ?? 'unknown'}), but the ${link.service} interface could not be confirmed automatically. Open the page to check it yourself.`
+        : `${result.health.replaceAll('_', ' ')}; HTTP ${status ?? 'unknown'}, service readiness ${result.serviceReady ?? 'unknown'}, branch ${result.correctBranch ?? 'unknown'}`;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       result.health = /timeout|timed out/i.test(message) ? 'timeout' : /blocked|robots/i.test(message) ? 'blocked' : 'network_error';

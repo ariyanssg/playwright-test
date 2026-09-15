@@ -528,20 +528,138 @@
 </div>
                 </section>
 
-                <section class="form-section advanced-section" aria-labelledby="settings-heading">
-                  <details>
-                    <summary>
+                <section class="form-section compare-section" aria-labelledby="compare-heading">
+                  <div class="form-section-heading">
 <span class="form-step">3</span>
+<div>
+<h3 id="compare-heading">Compare with Google <span class="step-optional">Optional</span></h3>
+<p>Check what Google shows customers against what the restaurant&rsquo;s own website says.</p>
+</div>
+</div>
+                  <div class="compare-card" id="hours-card">
+                    <label class="inspection-toggle">
+<input id="check-hours" type="checkbox">
+<span class="toggle-track">
 <span>
-<b id="settings-heading">Advanced settings</b>
-<small>Performance, crawl depth, and Google inspection</small>
 </span>
-<span class="settings-summary" id="settings-summary">5 workers · 10k crawl cap</span>
+</span>
+<span>
+<b>Opening hours</b>
+<small id="check-hours-note">Requires GOOGLE_MAPS_API_KEY · Places API is billed per request</small>
+</span>
+</label>
+                  </div>
+                  <div class="compare-card" id="profile-card">
+                    <label class="inspection-toggle">
+<input id="check-profile" type="checkbox">
+<span class="toggle-track">
+<span>
+</span>
+</span>
+<span>
+<b>Full business profile</b>
+<small>Name, phone, website, hours, menu, reservations and ordering links.</small>
+</span>
+</label>
+                    <div id="profile-options" class="compare-body hidden">
+                      <div class="field-group">
+<div class="field-label">
+<label for="profile-mode">Where should Google&rsquo;s information come from?</label>
+</div>
+<select id="profile-mode">
+<option value="public">Public Google Places listing</option>
+<option value="managed">Business Profile you manage</option>
+<option value="imported">Profile details you supply</option>
+</select>
+<p class="field-help" id="profile-source-note"></p>
+</div>
+                      <div class="requirement" id="profile-requirement" aria-live="polite">
+<span class="requirement-dot"></span>
+<div>
+<b id="profile-requirement-title">Checking&hellip;</b>
+<p id="profile-requirement-body"></p>
+</div>
+<button type="button" class="secondary compact" id="profile-test-key">Test key</button>
+</div>
+                      <div id="profile-managed" class="hidden">
+<div class="field-group">
+<div class="field-label">
+<label for="profile-location">Restaurant location</label>
+</div>
+<select id="profile-location">
+<option value="">Select a managed location</option>
+</select>
+<div class="inline-actions">
+<a href="/api/auth/gbp/start" class="secondary compact">Connect Business Profile</a>
+<button id="profile-load-locations" type="button" class="secondary compact">Load my locations</button>
+</div>
+</div>
+</div>
+                      <div id="profile-imported" class="hidden">
+<div class="field-group">
+<div class="field-label">
+<label for="profile-evidence">Profile details (JSON array)</label>
+</div>
+<textarea id="profile-evidence" rows="6" placeholder='[{"url":"https://example.com","observedAt":"2026-09-09T12:00:00Z","name":"Restaurant","address":"Street and postcode","services":{"menu":[],"reservations":[],"ordering":[]}}]'></textarea>
+</div>
+</div>
+                      <div class="field-group">
+<div class="field-label">
+<label for="profile-address">Branch address</label>
+<span>Recommended</span>
+</div>
+<input id="profile-address" type="text" placeholder="Street address and postcode">
+<p class="field-help" id="identity-summary">The street address and postcode are what confirm the branch. Without one, Google&rsquo;s listing often cannot be verified and every comparison stays unresolved.</p>
+</div>
+                      <details class="identity-details">
+                        <summary>
+<span>
+<b>More identity details</b>
+<small>Trading name and Google Place ID</small>
+</span>
 <svg viewBox="0 0 24 24" aria-hidden="true">
 <path d="m6 9 6 6 6-6"/>
 </svg>
 </summary>
-                    <div class="settings-grid">
+                        <div class="identity-fields">
+<div class="field-group">
+<div class="field-label">
+<label for="profile-name">Restaurant name</label>
+<span>Optional</span>
+</div>
+<input id="profile-name" type="text" placeholder="Trading name">
+</div>
+<div class="field-group">
+<div class="field-label">
+<label for="profile-place-id">Google Place ID</label>
+<span>Optional</span>
+</div>
+<input id="profile-place-id" type="text" placeholder="ChIJ…">
+<p class="field-help">Identity details apply to one restaurant. For several branches, import a CSV with url, name, address and place_id columns.</p>
+</div>
+</div>
+                      </details>
+                    </div>
+                  </div>
+                </section>
+
+                <section class="form-section advanced-section" aria-labelledby="settings-heading">
+                  <details>
+                    <summary>
+<span class="form-step">4</span>
+<span>
+<b id="settings-heading">Advanced settings</b>
+<small>Speed, limits, and comparison tolerances</small>
+</span>
+<span class="settings-summary" id="settings-summary">10 workers</span>
+<svg viewBox="0 0 24 24" aria-hidden="true">
+<path d="m6 9 6 6 6-6"/>
+</svg>
+</summary>
+                    <div class="settings-body">
+                      <div class="settings-group" id="group-speed">
+<h4>Speed and politeness</h4>
+<div class="settings-grid">
                       <label>
 <span>Global workers<small>Parallel browser pages</small>
 </span>
@@ -558,36 +676,59 @@
 <input id="host-delay" type="number" min="0" value="250">
 </label>
                       <label>
-<span>Crawl cap / site<small>Raise explicitly for larger sites</small>
-</span>
-<input id="crawl-limit" type="number" min="1" value="10000">
-</label>
-                      <label>
 <span>Navigation timeout<small>Milliseconds per attempt</small>
 </span>
 <input id="timeout" type="number" min="1000" value="30000">
 </label>
-                      <label>
+</div>
+</div>
+                      <div class="settings-group hidden" id="group-limits">
+<h4>Source limits</h4>
+<div class="settings-grid">
+                      <label data-needs-source="crawl">
+<span>Crawl cap / site<small>Raise explicitly for larger sites</small>
+</span>
+<input id="crawl-limit" type="number" min="1" value="10000">
+</label>
+                      <label data-needs-source="gsc">
 <span>Search Console days<small>Page evidence window</small>
 </span>
 <input id="gsc-days" type="number" min="1" value="90">
 </label>
-                      <label>
+                      <label data-needs-source="backlinks">
 <span>Backlink rows / site<small>Provider-billed maximum</small>
 </span>
 <input id="backlink-limit" type="number" min="1" value="100000">
 </label>
-                      <label>
+</div>
+</div>
+                      <div class="settings-group hidden" id="group-compare">
+<h4>Comparison tuning</h4>
+<div class="settings-grid">
+                      <label data-needs-toggle="check-hours">
 <span>Hours tolerance<small>Minutes counted as a minor drift</small>
 </span>
 <input id="hours-tolerance" type="number" min="0" value="15">
 </label>
-                      <label>
+                      <label data-needs-toggle="check-hours">
 <span>Hours pages / site<small>Pages read for opening hours</small>
 </span>
 <input id="hours-pages" type="number" min="1" value="5">
 </label>
-                    </div>
+                      <label data-needs-toggle="check-profile">
+<span>Profile pages / site<small>Pages read for profile evidence</small>
+</span>
+<input id="profile-pages" type="number" min="1" value="20">
+</label>
+                      <label data-needs-toggle="check-profile">
+<span>Profile hours tolerance<small>Differences stay visible either way</small>
+</span>
+<input id="profile-tolerance" type="number" min="0" value="0">
+</label>
+</div>
+</div>
+                      <div class="settings-group" id="group-inspect">
+<h4>Google Search Console</h4>
                     <label class="inspection-toggle">
 <input id="inspect-google" type="checkbox">
 <span class="toggle-track">
@@ -599,36 +740,12 @@
 <small>Uses URL Inspection quota only after live verification</small>
 </span>
 </label>
-                    <label class="inspection-toggle">
-<input id="check-hours" type="checkbox">
-<span class="toggle-track">
-<span>
-</span>
-</span>
-<span>
-<b>Compare Google and website opening hours</b>
-<small id="check-hours-note">Requires GOOGLE_MAPS_API_KEY · Places API is billed per request</small>
-</span>
-</label>
-                  </details>
-                </section>
-                <section class="profile-setup surface" id="profile-setup">
-                  <label class="inspection-toggle"><input id="check-profile" type="checkbox"><span class="toggle-track"><span></span></span><span><b>Cross-match Google Business Profile</b><small>Compare identity, contact details, hours, menu, reservations and ordering.</small></span></label>
-                  <div id="profile-options" class="hidden">
-                    <p class="muted">The profile audit crawls service and contact pages. Additional URL discovery sources above are optional.</p>
-                    <div class="profile-grid">
-                      <label>Profile source<select id="profile-mode"><option value="public">Public Google Places</option><option value="managed">Connected Business Profile</option><option value="imported">Supplied profile evidence</option></select></label>
-                      <label>Pages per restaurant<input id="profile-pages" type="number" min="1" value="20"></label>
-                      <label>Restaurant name (optional)<input id="profile-name" type="text" placeholder="Trading name"></label>
-                      <label>Branch address (recommended)<input id="profile-address" type="text" placeholder="Street address and postcode"></label>
-                      <label>Google Place ID (optional)<input id="profile-place-id" type="text"></label>
-                      <label>Hours severity tolerance (minutes)<input id="profile-tolerance" type="number" min="0" value="0"><small>Differences remain visible even within tolerance.</small></label>
+</div>
+                      <div class="settings-footer">
+<button type="button" class="text-button" id="reset-advanced">Reset advanced settings to defaults</button>
+</div>
                     </div>
-                    <div id="profile-managed" class="hidden"><a href="/api/auth/gbp/start" class="secondary compact">Connect Business Profile</a> <button id="profile-load-locations" type="button" class="secondary compact">Load my locations</button><label>Restaurant location<select id="profile-location"><option value="">Select a managed location</option></select></label></div>
-                    <div id="profile-imported" class="hidden"><label>Profile evidence (JSON array)<textarea id="profile-evidence" rows="7" placeholder='[{"url":"https://example.com","observedAt":"2026-09-09T12:00:00Z","name":"Restaurant","address":"Street and postcode","services":{"menu":[],"reservations":[],"ordering":[]}}]'></textarea></label></div>
-                    <p id="profile-source-note" class="muted">Public Places provides core information. Service URLs need a connected profile or supplied evidence. Google-derived comparisons remain available for one hour in this session; saved reports mark redacted fields.</p>
-                    <p class="muted">Identity hints apply to one restaurant. For multiple branches, import a CSV with URL, name, address and place_id columns.</p>
-                  </div>
+                  </details>
                 </section>
                 <div class="form-error" id="form-error" role="alert" aria-live="assertive"></div>
                 </div>
@@ -653,6 +770,10 @@
 <div>
 <dt>Verification</dt>
 <dd>Chromium</dd>
+</div>
+<div>
+<dt>Google compare</dt>
+<dd id="brief-compare">Not included</dd>
 </div>
 <div>
 <dt>Exports</dt>
@@ -1016,11 +1137,14 @@ Local browser works without a key. For SearchApi, set <code>SEARCHAPI_API_KEY</c
 <dd>
 <code>DATAFORSEO_LOGIN</code> and <code>DATAFORSEO_PASSWORD</code>
 </dd>
-<dt>Google Places opening hours</dt>
+<dt>Google Places (hours and public profile)</dt>
 <dd>
-<code>GOOGLE_MAPS_API_KEY</code>
-</dd>
+<code>GOOGLE_MAPS_API_KEY</code> &mdash; an API key, not the OAuth client above. Enable <b>Places API (New)</b> in Google Cloud, and make sure the key carries no IP or HTTP-referrer restriction that would block this machine. Use <b>Test key</b> to confirm Google accepts it.</dd>
+<dt>Google Business Profile (profile you manage)</dt>
+<dd>
+<code>GOOGLE_CLIENT_ID</code> and <code>GOOGLE_CLIENT_SECRET</code>, then connect the Google account that manages the restaurant.</dd>
 </dl>
+<p>A key that is present is not necessarily a key that works. If a profile audit returns no Google values, test the key here: Google&rsquo;s own reason for rejecting it is shown in full.</p>
 </details>
 </section>
 </main>

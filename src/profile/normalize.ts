@@ -8,10 +8,53 @@ export function phone(value: string, country = 'GB'): string | null {
   } catch { return null; }
 }
 export function textKey(value: string): string { return value.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim(); }
+
+/** Written forms that differ only by abbreviation describe the same street. */
+const STREET_WORDS: Record<string, string> = {
+  st: 'street', str: 'street', rd: 'road', ave: 'avenue', av: 'avenue', dr: 'drive', drv: 'drive',
+  ln: 'lane', blvd: 'boulevard', bvd: 'boulevard', pl: 'place', sq: 'square', ct: 'court',
+  cres: 'crescent', cr: 'crescent', gdns: 'gardens', gdn: 'garden', pde: 'parade', ter: 'terrace',
+  hwy: 'highway', pkwy: 'parkway', rte: 'route', bldg: 'building', fl: 'floor', flr: 'floor',
+  n: 'north', s: 'south', e: 'east', w: 'west', ne: 'northeast', nw: 'northwest', se: 'southeast', sw: 'southwest',
+};
+/** Country and nation names that Google appends and a website almost never prints. */
+const ADDRESS_FILLER = new Set(['uk', 'gb', 'usa', 'us', 'united', 'kingdom', 'states', 'england', 'scotland', 'wales', 'ireland', 'northern', 'britain', 'great']);
+const POSTCODE = /\b(?:[a-z]{1,2}\d[a-z\d]?\s*\d[a-z]{2}|\d{5}(?:\s*\d{4})?)\b/;
+
+interface AddressParts { number: string | null; postcode: string | null; words: string[] }
+function addressParts(value: string): AddressParts | null {
+  const key = textKey(value);
+  if (!key) return null;
+  const postcode = key.match(POSTCODE)?.[0]?.replace(/\s+/g, '') ?? null;
+  const rest = postcode ? key.replace(POSTCODE, ' ') : key;
+  const tokens = rest.split(/\s+/).filter(Boolean);
+  // The building number is the first bare number; a later one is a floor or unit.
+  const number = tokens.find(token => /^\d+[a-z]?$/.test(token)) ?? null;
+  const words = tokens
+    .filter(token => token !== number && !/^\d+[a-z]?$/.test(token))
+    .map(token => STREET_WORDS[token] ?? token)
+    .filter(token => !ADDRESS_FILLER.has(token));
+  return { number, postcode, words };
+}
+
+/**
+ * Google's formattedAddress inserts the town and country a website omits ("100 High St, SE1 2AB"
+ * against "100 High St, Norwood, London SE1 2AB, UK"), so the two are compared by word rather
+ * than as one contiguous string. A differing postcode or building number still decides against a
+ * match outright, keeping 1 High St distinct from 11 High St and one branch distinct from another.
+ */
 export function addressMatch(left: string, right: string): boolean {
-  const a = textKey(left), b = textKey(right);
-  // Require street/postcode detail and token boundaries; 1 High St is not 11 High St.
-  return /\d/.test(a) && /\d/.test(b) && a.length > 8 && b.length > 8 && (` ${a} `.includes(` ${b} `) || ` ${b} `.includes(` ${a} `));
+  const a = addressParts(left), b = addressParts(right);
+  if (!a || !b) return false;
+  if (a.postcode && b.postcode && a.postcode !== b.postcode) return false;
+  if (a.number && b.number && a.number !== b.number) return false;
+  const smaller = a.words.length <= b.words.length ? a : b, larger = smaller === a ? b : a;
+  const shared = smaller.words.filter(word => larger.words.includes(word));
+  // The shorter address must be fully accounted for, or share enough of the street to be the same one.
+  const consistent = (smaller.words.length > 0 && shared.length === smaller.words.length) || shared.length >= 2;
+  if (a.postcode && b.postcode) return consistent;
+  if (a.number && b.number) return consistent;
+  return false;
 }
 export function urlKey(value: string): string | null {
   try { const url = new URL(value); return ['http:', 'https:'].includes(url.protocol) ? url.href : null; } catch { return null; }

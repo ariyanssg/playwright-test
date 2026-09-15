@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { appDataDir } from './config.js';
 import { ScanService } from './service.js';
+import { checkPlacesKey } from './profile/providers.js';
 import type { ScanOptions, ScanProgressEvent } from './types.js';
 
 export interface ServerHandle {
@@ -59,6 +60,9 @@ async function routeRequest(service: ScanService, port: number, request: Incomin
       gbpConfigured: service.gbp.configured(),
       gbpAuthenticated: await service.gbp.authenticated(),
     });
+  }
+  if (method === 'POST' && url.pathname === '/api/providers/places/check') {
+    return json(response, 200, await checkPlacesKey());
   }
   if (method === 'GET' && url.pathname === '/api/scans') {
     return json(response, 200, { scans: service.listScans() });

@@ -116,3 +116,33 @@ test('GBP uses an independent token file',()=>{
   const connection=new BusinessProfileConnection();
   assert.match(connection.tokenPath,/gbp-token\.json$/);
 });
+
+test('Google formatted addresses verify the branch despite added town, country and abbreviations', () => {
+  const w = emptySnapshot('website');
+  fact(w, 'address', '100 Norwood High St, SE13 5NF', 'https://restaurant.test/', 'fixture');
+  const match = (address: string) => {
+    const g = emptySnapshot('places');
+    fact(g, 'address', address, 'https://maps.test/', 'places');
+    return resolveIdentity({ url: 'https://restaurant.test/' }, w, [g], 'GB').identity.status;
+  };
+  // Google appends the locality and country; the website prints neither.
+  assert.equal(match('100 Norwood High St, Norwood, London SE13 5NF, UK'), 'verified');
+  // Street type spelled out rather than abbreviated.
+  assert.equal(match('100 Norwood High Street, London SE13 5NF, United Kingdom'), 'verified');
+  // A different building number on the same street is a different address.
+  assert.equal(match('110 Norwood High St, Norwood, London SE13 5NF, UK'), 'unverified');
+  // A different postcode is a different branch even with the same street name.
+  assert.equal(match('100 Norwood High St, Norwood, London SE19 1AA, UK'), 'unverified');
+  // The same number and postcode on an unrelated street is not a match.
+  assert.equal(match('100 Marine Parade, Brighton BN2 1TL, UK'), 'unverified');
+});
+
+test('an identical value republished on every page is recorded once', () => {
+  const s = emptySnapshot('website');
+  for (const page of ['/', '/menu', '/contact']) fact(s, 'name', 'Rimjhim Southampton', `https://restaurant.test${page}`, 'JSON-LD name');
+  fact(s, 'name', 'Rimjhim Portsmouth', 'https://restaurant.test/other', 'JSON-LD name');
+  assert.deepEqual(s.facts.filter(f => f.field === 'name').map(f => f.raw), ['Rimjhim Southampton', 'Rimjhim Portsmouth']);
+  // A genuine disagreement between pages must still surface as a conflict.
+  const checks = compareProfiles(s, google(), true, 'GB', 0, []);
+  assert.equal(checks.find(c => c.field === 'name')?.verdict, 'source_conflict');
+});

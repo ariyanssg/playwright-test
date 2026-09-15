@@ -18,3 +18,50 @@
 .google-coverage { margin: 18px 0; padding: 18px 22px; border: 1px solid var(--line); border-radius: 12px; background: var(--amber-soft); overflow-wrap: anywhere; }
 .google-coverage p { margin: 10px 0; font-size: 13px; line-height: 1.6; }
 .google-coverage small { font-size: 12px; line-height: 1.5; }
+
+/* Step 3 — Google comparisons. Each comparison is a card that opens only what it needs. */
+.step-optional { margin-left: 8px; padding: 3px 6px; border-radius: 5px; background: #f1f4ee; color: #5d6b55; font-size: 10px; font-weight: 500; vertical-align: middle; letter-spacing: .3px; }
+.compare-card { padding: 16px 18px; border: 1px solid var(--line); border-radius: 10px; background: #fcfdfb; }
+.compare-card + .compare-card { margin-top: 12px; }
+.compare-card:has(input[type=checkbox]:checked) { background: #f7fbf4; border-color: #c8ddc4; }
+.compare-card .inspection-toggle { margin: 0; }
+.compare-body { margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--line); display: grid; gap: 18px; }
+.compare-body .field-group > select, .compare-body .field-group > input[type=text] { width: 100%; }
+.compare-body input[type=text] { min-height: 40px; padding: 9px 12px; background: white; border: 1px solid var(--line-strong); border-radius: 7px; color: var(--ink); font-size: 12px; }
+.compare-body textarea { padding-left: 15px; }
+.inline-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+
+/* Readiness banner: names the missing prerequisite instead of failing silently mid-audit. */
+.requirement { display: flex; align-items: flex-start; gap: 11px; padding: 13px 14px; border: 1px solid var(--line); border-radius: 9px; background: white; }
+.requirement > div { flex: 1; min-width: 0; }
+.requirement b { display: block; font-size: 12px; font-weight: 600; }
+.requirement p { margin-top: 5px; color: #5d6b55; font-size: 11px; line-height: 1.7; overflow-wrap: anywhere; }
+.requirement .requirement-dot { flex-shrink: 0; width: 8px; height: 8px; margin-top: 5px; border-radius: 50%; background: var(--line-strong); }
+.requirement.ready { border-color: #c8ddc4; background: var(--brand-soft); }
+.requirement.ready .requirement-dot { background: var(--brand); }
+.requirement.blocked { border-color: #ecd9bd; background: var(--amber-soft); }
+.requirement.blocked .requirement-dot { background: var(--amber); }
+.requirement .compact { flex-shrink: 0; }
+
+.identity-details { border: 1px solid var(--line); border-radius: 9px; background: white; }
+.identity-details summary { display: flex; align-items: center; gap: 12px; padding: 14px 16px; list-style: none; }
+.identity-details summary::-webkit-details-marker { display: none; }
+.identity-details summary b { display: block; font-size: 12px; font-weight: 550; }
+.identity-details summary small { display: block; margin-top: 5px; color: #5d6b55; font-size: 11px; }
+.identity-details summary > span { flex: 1; min-width: 0; }
+.identity-details summary > svg { width: 15px; height: 15px; color: #5d6b55; }
+.identity-details[open] summary > svg { transform: rotate(180deg); }
+.identity-fields { display: grid; gap: 18px; padding: 4px 16px 18px; }
+
+/* Step 4 — Advanced settings, grouped so related knobs read together. */
+.settings-body { padding: 0 28px 22px; }
+.settings-group + .settings-group { margin-top: 22px; padding-top: 20px; border-top: 1px solid var(--line); }
+.settings-group h4 { margin: 0 0 14px; color: #5d6b55; font-size: 11px; font-weight: 650; letter-spacing: .9px; text-transform: uppercase; }
+.settings-body .settings-grid { padding: 0; }
+.settings-group .inspection-toggle { margin: 0; }
+.settings-footer { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line); }
+.provider-card .provider-footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }
+.provider-card .provider-footer small { flex: 1; min-width: 0; }
+.provider-result { margin-top: 12px; font-size: 12px; line-height: 1.65; overflow-wrap: anywhere; }
+.provider-result.ok { color: var(--brand); }
+.provider-result.bad { color: var(--amber); }

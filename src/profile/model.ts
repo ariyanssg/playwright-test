@@ -54,6 +54,14 @@ export function emptySnapshot(source: Source, reason = 'Not observed'): ProfileS
 }
 export function fact(snapshot: ProfileSnapshot, field: string, value: unknown, url: string, locator: string, raw = typeof value === 'string' ? value : JSON.stringify(value), confidence: Fact['confidence'] = 'high'): void {
   if (value == null || value === '') return;
+  // The same restaurant name, telephone and schedule are republished on every page of a site.
+  // Recording each repetition once keeps a genuine disagreement between pages visible while
+  // keeping the comparison table from listing one identical value once per crawled page.
+  const serialized = JSON.stringify(value);
+  if (snapshot.facts.some(existing => existing.field === field && JSON.stringify(existing.value) === serialized)) {
+    snapshot.coverage[field] = { state: 'present', reason: `Observed in ${locator}` };
+    return;
+  }
   snapshot.facts.push({ field, value, raw, source: snapshot.source, url, locator, observedAt: new Date().toISOString(), confidence });
   snapshot.coverage[field] = { state: 'present', reason: `Observed in ${locator}` };
 }

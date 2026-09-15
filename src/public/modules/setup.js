@@ -1,8 +1,36 @@
 import { request, createScan } from './api.js';
 import { $, $$, lines, number, notify } from './ui.js';
 const presets = globalThis.SIGNAL404_HOSTED ? { google: ['google'], all: ['import', 'google'], local: ['import'], import: ['import'] } : { google: ['google'], all: ['import', 'sitemap', 'crawl', 'google', 'gsc', 'backlinks'], local: ['import', 'sitemap', 'crawl'], import: ['import'] };
+// Each profile source is served by a different Google product, so each has its own
+// prerequisite. Saying which one is missing is the difference between a blank comparison
+// table and a fix the operator can actually carry out.
+const profileSources = {
+  public: {
+    note: 'Reads the public Google Maps listing. Covers name, address, phone, website, hours and business status. Menu, reservation and ordering links are not published by this API.',
+    ready: (providers) => providers?.googleMaps,
+    readyTitle: 'Google Places key detected',
+    readyBody: 'Each restaurant costs one Places lookup, billed by Google.',
+    blockedTitle: 'GOOGLE_MAPS_API_KEY is missing',
+    blockedBody: 'Public listings come from the Places API (New), which uses an API key. GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET do not cover it — they authorize Search Console and the connected Business Profile mode. Add GOOGLE_MAPS_API_KEY to your .env file and restart the dashboard.',
+  },
+  managed: {
+    note: 'Reads the Business Profile you administer, including menu, reservation and ordering links that the public API never exposes.',
+    ready: (providers) => providers?.gbpAuthenticated,
+    readyTitle: 'Business Profile connected',
+    readyBody: 'Load your locations below and choose the restaurant to compare.',
+    blockedTitle: (providers) => providers?.gbpConfigured ? 'Business Profile is not connected yet' : 'GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET are missing',
+    blockedBody: (providers) => providers?.gbpConfigured ? 'Choose Connect Business Profile below and authorize the Google account that manages this restaurant.' : 'Add both values to your .env file, restart the dashboard, then connect the Google account that manages this restaurant.',
+  },
+  imported: {
+    note: 'Compares against profile details you paste in. Nothing is read from Google, so results are saved in full rather than expiring with the session.',
+    ready: () => true,
+    readyTitle: 'No Google connection needed',
+    readyBody: 'Paste one JSON record per restaurant below.',
+  },
+};
 export function initSetup(onCreated) {
   const form = $('#scan-form'), fileInput = $('#files'), button = $('#start-button');
+  let providerStatus = null;
   if (globalThis.SIGNAL404_HOSTED) {
     $$('[name="discovery"]').filter((input) => !['google', 'import'].includes(input.value)).forEach((input) => { input.checked = false; input.disabled = true; input.closest('.source-card').classList.add('hidden'); });
     $('[data-preset="local"]').classList.add('hidden');
@@ -13,17 +41,57 @@ export function initSetup(onCreated) {
       if (id === 'concurrency' || id === 'per-host') input.defaultValue = input.value = '1';
     }
   }
-  if (globalThis.SIGNAL404_HOSTED) $('#profile-setup').classList.add('hidden');
+  if (globalThis.SIGNAL404_HOSTED) $('#profile-card').classList.add('hidden');
+  const text = (value) => typeof value === 'function' ? value(providerStatus) : value;
   const profileMode = () => {
+    const mode = $('#profile-mode').value, source = profileSources[mode] || profileSources.public;
     $('#profile-options').classList.toggle('hidden', !$('#check-profile').checked);
-    $('#profile-managed').classList.toggle('hidden', $('#profile-mode').value !== 'managed');
-    $('#profile-imported').classList.toggle('hidden', $('#profile-mode').value !== 'imported');
+    $('#profile-managed').classList.toggle('hidden', mode !== 'managed');
+    $('#profile-imported').classList.toggle('hidden', mode !== 'imported');
+    $('#profile-source-note').textContent = source.note;
+    // Status is unknown until the provider request lands; claiming either state early would
+    // send the operator to fix something that is not actually broken.
+    const ready = providerStatus === null ? null : Boolean(source.ready(providerStatus));
+    const requirement = $('#profile-requirement');
+    requirement.classList.toggle('ready', ready === true);
+    requirement.classList.toggle('blocked', ready === false);
+    $('#profile-requirement-title').textContent = ready === null ? 'Checking connection…' : ready ? text(source.readyTitle) : text(source.blockedTitle);
+    $('#profile-requirement-body').textContent = ready === null ? '' : ready ? text(source.readyBody) : text(source.blockedBody);
+    $('#profile-test-key').classList.toggle('hidden', mode !== 'public' || !providerStatus?.googleMaps);
+    // The address is what verifies the branch, so its help text reflects the current state
+    // rather than repeating a warning that no longer applies.
+    $('#identity-summary').textContent = $('#profile-address').value.trim()
+      ? 'Google’s listing will be matched against this address before any value is compared.'
+      : 'The street address and postcode are what confirm the branch. Without one, Google’s listing often cannot be verified and every comparison stays unresolved.';
   };
   $('#check-profile').addEventListener('change', () => {
     if ($('#check-profile').checked) $$('[name="discovery"]').forEach(input => input.checked = input.value === 'import');
     profileMode(); update();
   });
-  $('#profile-mode').addEventListener('change', profileMode);
+  $('#profile-mode').addEventListener('change', () => { profileMode(); update(); });
+  $('#profile-address').addEventListener('input', profileMode);
+  $('#check-hours').addEventListener('change', update);
+  $('#profile-test-key').addEventListener('click', async () => {
+    const test = $('#profile-test-key'), original = test.textContent;
+    test.disabled = true; test.textContent = 'Testing…';
+    try {
+      const result = await request('/api/providers/places/check', { method: 'POST' });
+      const requirement = $('#profile-requirement');
+      requirement.classList.toggle('ready', result.ok);
+      requirement.classList.toggle('blocked', !result.ok);
+      $('#profile-requirement-title').textContent = result.ok ? 'Google Places key works' : 'Google rejected this key';
+      $('#profile-requirement-body').textContent = result.message;
+      notify(result.ok ? 'Google Places key works.' : 'Google rejected this key. See the details in the form.', !result.ok);
+    } catch (error) { notify(error.message, true); }
+    finally { test.disabled = false; test.textContent = original; }
+  });
+  $('#reset-advanced').addEventListener('click', () => {
+    for (const input of $$('.advanced-section input')) {
+      if (input.type === 'checkbox') input.checked = input.disabled ? false : input.defaultChecked;
+      else input.value = input.defaultValue;
+    }
+    update(); notify('Advanced settings restored to defaults.');
+  });
   $('#profile-load-locations').addEventListener('click', async () => {
     const button = $('#profile-load-locations'); button.disabled = true;
     try {
@@ -49,8 +117,19 @@ export function initSetup(onCreated) {
     $('#launch-detail').textContent = sites + urls + files.length ? `${number(sites + urls + files.length)} inputs · ${selected.length} sources selected` : 'Add a website, exact URL, or file to begin';
     $('.ready-chip').innerHTML = sites + urls + files.length ? '<span></span>Targets ready' : '<span></span>Set up your audit';
     $$('.preset-bar button').forEach((element) => element.setAttribute('aria-pressed', String(presets[element.dataset.preset].join() === selected.join())));
+    // An advanced setting that governs a source or comparison this audit is not running is
+    // noise. Only the knobs that will actually affect this run stay on screen.
+    for (const label of $$('.settings-grid [data-needs-source]')) label.classList.toggle('hidden', !selected.includes(label.dataset.needsSource));
+    for (const label of $$('.settings-grid [data-needs-toggle]')) label.classList.toggle('hidden', !$(`#${label.dataset.needsToggle}`).checked);
+    for (const group of $$('.settings-group')) {
+      const optional = $$('[data-needs-source], [data-needs-toggle]', group);
+      if (optional.length) group.classList.toggle('hidden', optional.every((label) => label.classList.contains('hidden')));
+    }
+    const comparisons = [$('#check-hours').checked && 'opening hours', $('#check-profile').checked && 'business profile'].filter(Boolean);
+    $('#brief-compare').textContent = comparisons.length ? comparisons.join(' + ') : 'Not included';
+    $('#compare-heading').closest('.form-section').classList.toggle('section-active', comparisons.length > 0);
     const cap = new Intl.NumberFormat(undefined, { notation: 'compact' }).format(Number($('#crawl-limit').value));
-    $('#settings-summary').textContent = `${$('#concurrency').value} workers · ${selected.includes('google') ? `${$('#google-max-pages').value} Google pages` : `${cap} crawl cap`}`;
+    $('#settings-summary').textContent = [`${$('#concurrency').value} workers`, selected.includes('google') && `${$('#google-max-pages').value} Google pages`, selected.includes('crawl') && `${cap} crawl cap`].filter(Boolean).join(' · ');
   }
   form.addEventListener('input', update);
   fileInput.addEventListener('change', update);
@@ -61,6 +140,7 @@ export function initSetup(onCreated) {
     $('#form-error').textContent = '';
     if ($('#check-hours').disabled) $('#check-hours').checked = false;
     profileMode(); update(); notify('Audit setup reset'); $('#sites').focus();
+    $('.advanced-section details').open = false;
   });
   $$('.preset-bar button').forEach((element) => element.addEventListener('click', () => {
     $$('[name="discovery"]').forEach((input) => { input.checked = presets[element.dataset.preset].includes(input.value); }); update();
@@ -136,4 +216,5 @@ export function initSetup(onCreated) {
     if (created) { notify('Audit started. We’ll keep your progress saved.'); onCreated(created.id); }
   });
   update();
+  return function applyProviderStatus(status) { providerStatus = status; profileMode(); update(); };
 }

@@ -65,15 +65,17 @@ export async function auditProfile(auditId: string, target: ProfileTarget, optio
 }
 
 export function resolveIdentity(target: ProfileTarget, website: ProfileSnapshot, candidates: ProfileSnapshot[], country: string): { identity: ProfileReport['identity']; snapshot?: ProfileSnapshot } {
-  const expectedAddress = target.address || first<string>(website, 'address') || '';
-  const expectedPhone = phone(first<string>(website, 'phone') || '', country);
+  // A site may print its address in a footer and again, differently punctuated, on a contact
+  // page. Any published address is valid branch evidence, so all of them are candidates.
+  const expectedAddresses = (target.address ? [target.address] : website.facts.filter(f => f.field === 'address').map(f => String(f.value))).filter(Boolean);
+  const expectedPhones = website.facts.filter(f => f.field === 'phone').map(f => phone(String(f.value), country)).filter(Boolean);
   const scored = candidates.map(snapshot => {
     const actualAddress = first<string>(snapshot, 'address') || '';
-    const addressMatches = addressMatch(expectedAddress, actualAddress);
-    const phoneMatches = Boolean(expectedPhone && expectedPhone === phone(first<string>(snapshot, 'phone') || '', country));
+    const addressMatches = expectedAddresses.some(expected => addressMatch(expected, actualAddress));
+    const phoneMatches = expectedPhones.includes(phone(first<string>(snapshot, 'phone') || '', country));
     const hostMatches = sameHost(first<string>(snapshot, 'website') || '', target.url);
     // A branch address is independent evidence even when name, telephone or GBP URL is wrong.
-    const addressConflict = Boolean(expectedAddress && actualAddress && /\d/.test(expectedAddress) && /\d/.test(actualAddress) && !addressMatches);
+    const addressConflict = Boolean(expectedAddresses.length && actualAddress && /\d/.test(actualAddress) && expectedAddresses.some(expected => /\d/.test(expected)) && !addressMatches);
     const score = addressMatches ? 3 : !addressConflict && phoneMatches && hostMatches ? 2 : 0;
     return { snapshot, score };
   }).sort((a, b) => b.score - a.score);

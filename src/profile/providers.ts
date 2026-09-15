@@ -28,6 +28,37 @@ export class BusinessProfileConnection extends GoogleSearchConsole {
   }
 }
 
+/**
+ * A rejected Google key is the most common reason a profile audit produces nothing, and the
+ * HTTP status alone never says which of the many causes applied. Google puts the actionable
+ * sentence in the response body, so failures carry it through instead of discarding it.
+ */
+export async function providerFailure(response: Response, body: string): Promise<Error> {
+  let detail = '';
+  let reason = '';
+  try {
+    const parsed = JSON.parse(body);
+    detail = typeof parsed?.error?.message === 'string' ? parsed.error.message : '';
+    reason = parsed?.error?.details?.find((item: Json) => typeof item?.reason === 'string')?.reason || parsed?.error?.status || '';
+  } catch {
+    detail = body.trim().slice(0, 300);
+  }
+  const advice = PROVIDER_ADVICE[reason] || (response.status === 403 && !detail ? PROVIDER_ADVICE.PERMISSION_DENIED : '');
+  return new Error([`Google API HTTP ${response.status}`, detail && `: ${detail}`, reason && ` (${reason})`, advice && ` ${advice}`].filter(Boolean).join(''));
+}
+
+/** Google's own message names the problem; these name the fix, which the message never does. */
+const PROVIDER_ADVICE: Record<string, string> = {
+  API_KEY_IP_ADDRESS_BLOCKED: 'Edit this key in Google Cloud Console → APIs & Services → Credentials and either add this machine\'s IP to the allow list or remove the IP restriction.',
+  API_KEY_HTTP_REFERRER_BLOCKED: 'This key is restricted to website referrers, which a server-side audit cannot send. Create a key with no referrer restriction, or restrict it by IP instead.',
+  API_KEY_SERVICE_BLOCKED: 'Add "Places API (New)" to this key\'s API restrictions in Google Cloud Console.',
+  API_KEY_INVALID: 'Check GOOGLE_MAPS_API_KEY for stray spaces or a truncated value, then restart the dashboard.',
+  SERVICE_DISABLED: 'Enable "Places API (New)" for this project in Google Cloud Console.',
+  BILLING_DISABLED: 'Enable billing on this Google Cloud project; Places API requests are billed per call.',
+  RATE_LIMIT_EXCEEDED: 'The project quota is exhausted; raise the Places API quota or retry later.',
+  PERMISSION_DENIED: 'Check that GOOGLE_MAPS_API_KEY is valid, that Places API (New) is enabled, and that no IP or referrer restriction blocks this machine.',
+};
+
 export async function requestJson(url: string, init: RequestInit = {}, signal?: AbortSignal): Promise<Json> {
   for (let attempt = 0; attempt < 3; attempt++) {
     const response = await fetch(url, { ...init, signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(30000)]) : AbortSignal.timeout(30000) });
@@ -36,24 +67,47 @@ export async function requestJson(url: string, init: RequestInit = {}, signal?: 
       if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid provider response');
       return value as Json;
     }
+    const body = await response.text().catch(() => '');
     if ((response.status === 429 || response.status >= 500) && attempt < 2) {
       const retry = response.headers.get('retry-after');
       const retryMs = retry ? (/^\d+$/.test(retry) ? Number(retry) * 1000 : Date.parse(retry) - Date.now()) : 1000 * 2 ** attempt;
-      if (retryMs > 30000) throw new Error(`Provider HTTP ${response.status}; retry later`);
+      if (retryMs > 30000) throw await providerFailure(response, body);
       await delay(Math.max(500, retryMs || 1000), undefined, { signal }); continue;
     }
-    throw new Error(`Provider HTTP ${response.status}`);
+    throw await providerFailure(response, body);
   }
   throw new Error('Provider retries exhausted');
 }
 
 export async function publicProfiles(query: string, placeId?: string, signal?: AbortSignal, read?: ApiRead): Promise<ProfileSnapshot[]> {
   const key = process.env.GOOGLE_MAPS_API_KEY;
-  if (!key && !read) throw new Error('Connect Google Places using GOOGLE_MAPS_API_KEY');
+  // GOOGLE_CLIENT_ID/SECRET authorize Search Console and the managed Business Profile API.
+  // Public Places is a separate, key-based product, so name it rather than implying OAuth.
+  if (!key && !read) throw new Error('Public profile cross-matching needs GOOGLE_MAPS_API_KEY (Places API New). GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET only cover Search Console and the connected Business Profile mode.');
   const call = read ?? ((url, init) => requestJson(url, init, signal));
   const headers = { 'X-Goog-Api-Key': key || '', 'X-Goog-FieldMask': placeId ? PLACE_FIELDS : PLACE_FIELDS.split(',').map(f => `places.${f}`).join(','), 'content-type': 'application/json' };
   const data = await call(placeId ? `https://places.googleapis.com/v1/places/${encodeURIComponent(placeId)}` : 'https://places.googleapis.com/v1/places:searchText', placeId ? { headers } : { method: 'POST', headers, body: JSON.stringify({ textQuery: query, languageCode: 'en', pageSize: 5 }) });
   return (placeId ? [data] : Array.isArray(data.places) ? data.places : []).map(fromPlace);
+}
+
+/**
+ * Verifies GOOGLE_MAPS_API_KEY against the live Places API on request. The `places.id` field
+ * mask keeps this on the ID-only Text Search tier so checking a key is not a priced lookup.
+ */
+export async function checkPlacesKey(read?: ApiRead): Promise<{ ok: boolean; message: string }> {
+  const key = process.env.GOOGLE_MAPS_API_KEY;
+  if (!key && !read) return { ok: false, message: 'GOOGLE_MAPS_API_KEY is not set. Add it to your .env file and restart the dashboard.' };
+  const call = read ?? ((url, init) => requestJson(url, init));
+  try {
+    await call('https://places.googleapis.com/v1/places:searchText', {
+      method: 'POST',
+      headers: { 'X-Goog-Api-Key': key || '', 'X-Goog-FieldMask': 'places.id', 'content-type': 'application/json' },
+      body: JSON.stringify({ textQuery: 'restaurant', languageCode: 'en', pageSize: 1 }),
+    });
+    return { ok: true, message: 'Google Places accepted this key. Public profile cross-matching is ready.' };
+  } catch (error) {
+    return { ok: false, message: error instanceof Error ? error.message : String(error) };
+  }
 }
 
 export function fromPlace(data: Json): ProfileSnapshot {

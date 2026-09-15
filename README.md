@@ -169,6 +169,12 @@ npm run cli -- scan \
 
 **Setup.** Enable **Places API (New)** in Google Cloud and set `GOOGLE_MAPS_API_KEY`, either in a `.env` file in the project root (copy `.env.example`) or exported in the shell. Text Search and Place Details are billed per request, and asking for opening hours puts the call in a higher-priced field tier - the stage is off by default for that reason, and issues at most one lookup per unique site.
 
+`GOOGLE_MAPS_API_KEY` is an API key and is **not** the same credential as `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`, which authorize Search Console and the connected Business Profile mode. A key that exists can still be refused - an IP or HTTP-referrer restriction on the key blocks server-side calls like these, and Google reports that as HTTP 403. The dashboard shows Google's own reason in full: open **Connections -> Google Places -> Test key**, or use the **Test key** button beside the profile source in a new audit. From the shell:
+
+```bash
+curl -s -X POST http://127.0.0.1:4173/api/providers/places/check
+```
+
 **Options.**
 
 | Flag | Default | Effect |

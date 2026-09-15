@@ -18,7 +18,7 @@ let router;
 const workspace = createWorkspace((id) => router.go('audit-workspace', id));
 const audit = createAudit(workspace.update, () => { void workspace.load().catch(showError); });
 const initialRuns = workspace.load().catch(showError);
-initSetup((id) => { router.go('audit-workspace', id); void workspace.load().catch(showError); });
+const applyProviderStatus = initSetup((id) => { router.go('audit-workspace', id); void workspace.load().catch(showError); });
 router = initRouter(async (view, id) => {
   if (view === 'audit-workspace') {
     await initialRuns;
@@ -27,14 +27,14 @@ router = initRouter(async (view, id) => {
     await audit.select(id || audit.id() || workspace.latest());
   }
 });
-void loadConnections().catch(showError);
+void loadConnections(applyProviderStatus).catch(showError);
 $('#dismiss-toast').addEventListener('click', dismissToast);
 dismissToast();
 async function reload(button, connections = false) {
   button.disabled = true; button.setAttribute('aria-busy', 'true');
   $('#app-error').classList.add('hidden');
   try {
-    await Promise.all([workspace.load(), audit.reload(), ...(connections ? [loadConnections()] : [])]);
+    await Promise.all([workspace.load(), audit.reload(), ...(connections ? [loadConnections(applyProviderStatus)] : [])]);
     if (location.hash.startsWith('#audit-workspace') && !audit.id()) await audit.select(workspace.latest());
     notify('Workspace is up to date');
   } catch (error) { showError(error); }

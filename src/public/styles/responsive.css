@@ -20,3 +20,11 @@
 @media (prefers-contrast: more) {
   :root { --line: #adbba8; --muted: #4a5846; }.eyebrow, small, .field-help, .source-copy small, .overview-stat small { color: #4d634b; }
 }
+@media (max-width: 700px) {
+  .compare-card { padding: 14px; }
+  .requirement { flex-wrap: wrap; }
+  .requirement > div { flex-basis: 100%; }
+  .requirement .compact { margin-left: 19px; }
+  .settings-body { padding: 0 18px 20px; }
+  .identity-fields { padding: 4px 14px 16px; }
+}

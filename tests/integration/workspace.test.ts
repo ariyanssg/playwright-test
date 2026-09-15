@@ -95,7 +95,8 @@ test('workspace routes, full-inventory search, pagination, evidence, and respons
     await page.locator('#history-filter').selectOption('completed');
     await page.locator('#run-list').filter({ hasText: 'No matching audits' }).waitFor();
     await page.locator('[data-view-link="connections"]').click();
-    assert.equal(await page.locator('.provider-card').count(), 5);
+    // Website discovery, Google search, Search Console, DataForSEO, Places, Business Profile.
+    assert.equal(await page.locator('.provider-card').count(), 6);
 
     const screenshots = resolve('output/playwright'); await mkdir(screenshots, { recursive: true });
     for (const width of [1440, 1024, 820, 768, 760, 390, 320]) {
