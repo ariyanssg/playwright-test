@@ -67,7 +67,8 @@ test('workspace routes, full-inventory search, pagination, evidence, and respons
     assert.equal(await page.locator('#results-body tr').count(), 25);
     await page.locator('#next-page').click();
     await page.locator('#page-number').filter({ hasText: 'Page 2 of 21' }).waitFor();
-    assert.match(await page.locator('#results-body tr').first().innerText(), /0025/);
+    // Broken pages sort first, so the lone hard 404 (0510) shifts every healthy row down by one.
+    assert.match(await page.locator('#results-body tr').first().innerText(), /0024/);
     await page.locator('#result-search').fill('seasonal');
     await page.locator('#result-count').filter({ hasText: /^1$/ }).waitFor();
     assert.match(await page.locator('#results-body').innerText(), /0510/);

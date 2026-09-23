@@ -13,9 +13,9 @@ import { AUDITOR_USER_AGENT } from './robots.js';
  * Resource types that never change a missing-page verdict. Styles are included because every
  * signal the classifier reads comes from `textContent`, which ignores CSS.
  */
-const BLOCKED_RESOURCES = new Set(['image', 'media', 'font', 'stylesheet']);
-/** Trackers and ad exchanges: pure latency on a page we only read text from. */
-const BLOCKED_HOSTS = /(?:^|\.)(?:google-analytics\.com|googletagmanager\.com|doubleclick\.net|googlesyndication\.com|facebook\.net|connect\.facebook\.com|hotjar\.com|clarity\.ms|segment\.(?:io|com)|mixpanel\.com|intercom\.io|fullstory\.com|newrelic\.com|criteo\.com|taboola\.com|outbrain\.com)$/i;
+const BLOCKED_RESOURCES = new Set(['image', 'media', 'font', 'stylesheet', 'texttrack', 'manifest', 'eventsource', 'websocket']);
+/** Trackers, ad exchanges and chat widgets: pure latency on a page we only read text from. */
+const BLOCKED_HOSTS = /(?:^|\.)(?:google-analytics\.com|googletagmanager\.com|googleadservices\.com|adservice\.google\.com|doubleclick\.net|googlesyndication\.com|facebook\.net|connect\.facebook\.com|hotjar\.com|clarity\.ms|segment\.(?:io|com)|mixpanel\.com|intercom\.io|fullstory\.com|newrelic\.com|nr-data\.net|criteo\.com|taboola\.com|outbrain\.com|bat\.bing\.com|analytics\.tiktok\.com|ct\.pinterest\.com|snap\.licdn\.com|px\.ads\.linkedin\.com|mc\.yandex\.ru|scorecardresearch\.com|quantserve\.com|tawk\.to|zopim\.com|livechatinc\.com|crisp\.chat)$/i;
 
 /** Applies the shared blocking policy to a context so page loads carry only what we read. */
 export async function blockUnreadResources(context: BrowserContext): Promise<void> {
@@ -78,14 +78,17 @@ export class BrowserScanner {
     });
     await blockUnreadResources(this.context);
 
+    // Interleave hosts so the global workers are not all parked behind one host's limiter while
+    // every other site in the audit sits idle.
+    const queue = interleaveByHost(candidates);
     let nextIndex = 0;
-    const workerCount = Math.min(this.options.concurrency, candidates.length);
+    const workerCount = Math.min(this.options.concurrency, queue.length);
     const workers = Array.from({ length: workerCount }, async () => {
       const page = await this.context!.newPage();
       try {
         for (;;) {
           if (this.db.isCancelled(scanId)) return;
-          const candidate = candidates[nextIndex++];
+          const candidate = queue[nextIndex++];
           if (!candidate) return;
           this.db.markCandidateRunning(scanId, candidate.normalizedUrl);
           const result = await this.scanCandidate(page, candidate);
@@ -193,6 +196,12 @@ export class BrowserScanner {
 
 /** Text long enough that a settle wait is unlikely to change the verdict. */
 const SETTLED_TEXT_CHARS = 400;
+/** Upper bound on waiting for a client-rendered page to produce its copy. */
+const MAX_SETTLE_MS = 2_000;
+/** A short page whose text has not moved for this long is treated as finished. */
+const STABLE_TEXT_MS = 450;
+/** Phrases worth reading immediately: the verdict is already on the page. */
+const SETTLE_EARLY_EXIT = String.raw`not\s+found|404|410|does\s*n[o']t\s+exist|no\s+longer\s+(?:exists|available)|you\s+seem\s+lost`;
 
 const readSignals = () => {
   const main = document.querySelector('main, [role="main"], article') ?? document.body;
@@ -217,7 +226,22 @@ export async function renderPage(page: Page, url: string, timeoutMs: number): Pr
     // decided by the classifier, and a page that arrived with its copy has nothing to wait for.
     const status = response.status();
     if (status >= 200 && status < 300 && content.mainText.length < SETTLED_TEXT_CHARS) {
-      await page.waitForTimeout(Math.min(750, Math.max(250, Math.floor(timeoutMs / 4))));
+      // Wait only as long as the page is still changing: server-rendered pages return at once,
+      // while a client-rendered shell ("Loading…") is given time to swap in its real copy.
+      // The callback is inline and declares no named functions (see harvest.ts on `__name`).
+      await page.waitForFunction(({ min, stableMs, early }) => {
+        const root = document.querySelector('main, [role="main"], article') ?? document.body;
+        const text = (root?.textContent || '').replace(/\s+/g, ' ').trim();
+        const probe = `${document.title} ${document.querySelector('h1')?.textContent || ''} ${text.slice(0, 800)}`;
+        if (text.length >= min || new RegExp(early, 'i').test(probe)) return true;
+        const holder = window as unknown as { __seo404Settle?: { length: number; since: number } };
+        const now = performance.now();
+        if (!holder.__seo404Settle || holder.__seo404Settle.length !== text.length) {
+          holder.__seo404Settle = { length: text.length, since: now };
+          return false;
+        }
+        return document.readyState === 'complete' && !/loading|please wait/i.test(probe) && now - holder.__seo404Settle.since >= stableMs;
+      }, { min: SETTLED_TEXT_CHARS, stableMs: STABLE_TEXT_MS, early: SETTLE_EARLY_EXIT }, { timeout: Math.min(MAX_SETTLE_MS, Math.max(250, Math.floor(timeoutMs / 3))), polling: 100 }).catch(() => undefined);
       content = await page.evaluate(readSignals).catch(() => content);
     }
     const headers = response.headers();
@@ -403,6 +427,32 @@ export class HostLimiter {
     }
     return gate;
   }
+}
+
+/**
+ * Round-robins candidates across hosts while keeping each host's own order. Sorted input used
+ * to hand every worker the same host at once, so per-host limits serialized a multi-site audit.
+ */
+export function interleaveByHost<T extends { normalizedUrl: string }>(candidates: readonly T[]): T[] {
+  const buckets = new Map<string, T[]>();
+  for (const candidate of candidates) {
+    let host = '';
+    try {
+      host = new URL(candidate.normalizedUrl).host;
+    } catch {
+      // Unparseable URLs share one bucket and still get checked.
+    }
+    let bucket = buckets.get(host);
+    if (!bucket) buckets.set(host, bucket = []);
+    bucket.push(candidate);
+  }
+  if (buckets.size < 2) return [...candidates];
+  const lists = [...buckets.values()];
+  const output: T[] = [];
+  for (let index = 0; output.length < candidates.length; index += 1) {
+    for (const list of lists) if (index < list.length) output.push(list[index]!);
+  }
+  return output;
 }
 
 export function meetsFailureThreshold(result: ScanResult, threshold: 'hard' | 'soft' | 'none'): boolean {

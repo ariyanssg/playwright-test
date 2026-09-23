@@ -8,7 +8,7 @@ The same durable scan engine powers both the CLI and the localhost dashboard. Jo
 
 - `hard_404`: final HTTP 404 response
 - `gone_410`: final HTTP 410 response
-- `soft_404_suspected`: successful HTTP response whose rendered title, heading, content, or similarity to a synthetic missing-page baseline strongly indicates an error page
+- `soft_404_suspected`: successful HTTP response whose rendered title, heading, content, or similarity to a synthetic missing-page baseline strongly indicates an error page, or a deep URL that redirects (by HTTP, script, or meta refresh) to the site's homepage. Brand names such as "404 Kitchen" are not treated as error signals, and an empty page never counts as matching an empty error template
 - `redirected`, `ok`, `server_error`, `blocked`, `timeout`, and `network_error`
 
 Soft 404s are deliberately labeled as suspected and include a confidence score plus the exact evidence used. Successful redirects are retained for review but are not treated as broken pages.
@@ -74,7 +74,7 @@ npm run cli -- serve --port 4173 --open
 
 Run `npm run cli -- help` for every scan option. Website audits default to **Google results only** (`--discover google`). The homepage is a search target, not an automatically added candidate. Google discovery searches five queries, starting with each query's first page, and defaults to UK English with a total budget of 50 search pages per website. Choose `--discover all` for a combined website/search/backlink audit, or `--discover import,sitemap,crawl` for website discovery. Exact URLs and files remain uncapped and default to import-only when no websites are supplied.
 
-The scanner defaults to five workers, at most two active requests per host, a 300 ms host delay, and a 30-second navigation timeout. Crawl and backlink caps apply only when those sources are selected.
+The scanner defaults to ten workers, at most four active requests per host, a 250 ms host delay, and a 30-second navigation timeout. URLs are interleaved across hosts so a multi-site audit keeps every worker busy, and a page is only held open while a client-rendered shell is still changing (up to two seconds) instead of for a fixed pause. Crawl and backlink caps apply only when those sources are selected.
 
 CLI exit codes:
 
@@ -186,7 +186,7 @@ curl -s -X POST http://127.0.0.1:4173/api/providers/places/check
 
 **Matching a restaurant to its listing.** A `place_id` column wins outright. Otherwise the restaurant's name and address come from the input file or from the site's own JSON-LD, a Text Search is issued, and a returned listing counts as **verified** only when its `websiteUri` host matches the site's. Several listings pointing at one domain are reported as **ambiguous** rather than guessed at, and a name-only match is reported as **unverified** and flagged in the workbook, the CSV, the notes, and the run warnings.
 
-**Reading hours from the website.** Three layers, in confidence order: schema.org JSON-LD (`openingHoursSpecification` and the legacy `openingHours` shorthand), microdata, then visible page text. The highest-confidence layer that produced anything wins outright - layers are never merged, because combining a partial specification with text guesses would invent hours that appear in neither source. A day is only compared when the source actually says something about it, so a site listing Monday to Friday is reported as `partial`, never as closed at the weekend.
+**Reading hours from the website.** Three layers, in confidence order: schema.org JSON-LD (`openingHoursSpecification` and the legacy `openingHours` shorthand, including several day groups in one value such as `Mo-Sa 11:00-23:00 Su 12:00-22:00`), microdata, then visible page text. The text reader accepts UK dotted times (`11.30am`), reads bare 12-hour ranges the way a restaurant means them (`11-10` is 11 AM to 10 PM), keeps a day whose line also mentions a closed break, and ignores ordinary words that look like day abbreviations ("We are open…"). The highest-ranked page is read first; when it already publishes a complete structured week the remaining pages are skipped, otherwise they load in parallel. The highest-confidence layer that produced anything wins outright - layers are never merged, because combining a partial specification with text guesses would invent hours that appear in neither source. A day is only compared when the source actually says something about it, so a site listing Monday to Friday is reported as `partial`, never as closed at the weekend.
 
 **Comparing.** Both sides are local wall-clock times at the restaurant, so no timezone conversion happens; `utcOffsetMinutes` is recorded as context only. The comparison handles closes after midnight, split lunch and dinner shifts, closed days, and around-the-clock listings. Tolerance applies to each boundary independently.
 
@@ -292,18 +292,22 @@ and forward preserve the current form and result filters.
 - `src/public/modules/audit.js` owns scan selection, SSE/polling, results, and evidence.
 - `src/public/modules/connections.js` owns provider readiness and optional features.
 - `src/public/modules/ui.js` contains shared formatting and feedback primitives.
-- `src/public/styles/` separates design tokens, layout, views, and responsive rules.
+- `src/public/styles.css` holds the whole design system in one file (no import chain), with light and dark themes.
+- `src/public/fonts/` bundles Archivo and Martian Mono (SIL OFL), so the dashboard makes no third-party font requests.
 
 Search and outcome filtering run in SQLite before results are paginated into
-25-row pages. `GET /api/scans/:id/results` accepts `search`, `classification`,
+25-row pages, ordered worst first (hard 404, gone, suspected soft 404, errors,
+redirects, then healthy pages). `GET /api/scans/:id/results` accepts `search`, `classification`,
 `offset`, and `limit` (1–1,000); search covers URLs, page titles, and classification
 reasons. Audit history includes all saved runs. Requests from a previous scan
 selection cannot overwrite the current view. Live results use SSE, with periodic
 reconciliation and retry feedback if the connection drops.
 
-The interface supports keyboard navigation, focus-managed mobile navigation,
-native evidence dialogs, reduced motion, visible validation, and retryable load
-failures. The workspace regression tests cover these flows against isolated
+The interface supports keyboard navigation, a Ctrl/⌘ K palette that jumps to any
+page or recent audit, focus-managed mobile navigation, a native evidence side
+sheet, reduced motion, light and dark themes, visible validation, and retryable
+load failures. Live progress is painted at most once per frame, and polling
+never re-renders a table whose data has not changed. The workspace regression tests cover these flows against isolated
 SQLite databases, including 511 results, more than 50 audits, and layouts from
 320px to 1440px. Existing fixture-site tests verify real Chromium scans,
 report downloads, cancellation, and resume through the redesigned interface.

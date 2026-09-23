@@ -152,3 +152,29 @@ test('phone numbers and prices are not read as hours', () => {
 test('text results are always low confidence', () => {
   assert.equal(parseTextHours(['Mon-Fri 11:00-22:00'])?.confidence, 'low');
 });
+
+test('legacy strings may pack several day groups into one value', () => {
+  const packed = parseOpeningHoursString('Mo-Sa 11:00-23:00 Su 12:00-22:00');
+  assert.ok(packed);
+  assert.deepEqual([...packed.days].sort(), [0, 1, 2, 3, 4, 5, 6]);
+  assert.equal(parseOpeningHoursString('Mo-Fr 11:00-22:00; Sa-Su 12:00-23:00')?.days.length, 7);
+  assert.equal(parseOpeningHoursString('Mo-Fr 11:00-22:00 whenever')?.days, undefined);
+});
+
+test('an ordinary word that looks like a day abbreviation is not read as hours', () => {
+  assert.equal(parseTextHours(['We are open 11am-10pm daily']), null);
+  assert.equal(parseTextHours(['Sun-drenched terrace, open 12-10']), null);
+  assert.equal(textDays(['Sat\n10am-4pm'], 6), '10:00 AM - 4:00 PM');
+  assert.equal(textDays(['Sun: 12pm-9pm'], 0), '12:00 PM - 9:00 PM');
+});
+
+test('dotted UK times and 12-hour shorthand without am/pm read as a restaurant means them', () => {
+  assert.equal(textDays(['Mon-Fri 11.30am - 10.30pm'], 2), '11:30 AM - 10:30 PM');
+  assert.equal(textDays(['Mon-Sat 11-10'], 3), '11:00 AM - 10:00 PM');
+  assert.equal(textDays(['Fri-Sat 5-2'], 5), '5:00 PM - 2:00 AM (+1)');
+  assert.equal(textDays(['Mon: 12-3, 5-11'], 1), '12:00 PM - 3:00 PM, 5:00 PM - 11:00 PM');
+});
+
+test('a closed break inside the day does not erase the day', () => {
+  assert.equal(textDays(['Mon-Fri 11am-10pm (kitchen closed 3-5pm)'], 1), '11:00 AM - 10:00 PM');
+});

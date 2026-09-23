@@ -43,7 +43,7 @@ async function routeRequest(service: ScanService, port: number, request: Incomin
   const url = new URL(request.url ?? '/', `http://127.0.0.1:${port}`);
   const method = request.method ?? 'GET';
 
-  if (method === 'GET' && (url.pathname === '/' || /^\/(?:app\.js|runtime\.js|styles\.css|(?:modules|styles)\/[a-z-]+\.(?:js|css))$/.test(url.pathname))) {
+  if (method === 'GET' && (url.pathname === '/' || /^\/(?:app\.js|runtime\.js|styles\.css|(?:modules|styles)\/[a-z-]+\.(?:js|css)|fonts\/[a-z-]+\.woff2)$/.test(url.pathname))) {
     return serveStatic(url.pathname, response);
   }
   if (method === 'GET' && url.pathname === '/api/health') {
@@ -194,7 +194,9 @@ async function serveStatic(pathname: string, response: ServerResponse): Promise<
   const filePath = fileURLToPath(new URL(`./public/${fileName}`, import.meta.url));
   const info = await stat(filePath).catch(() => null);
   if (!info?.isFile()) return json(response, 404, { error: 'Not found' });
-  response.writeHead(200, { 'content-type': contentType(fileName), 'content-length': info.size, 'cache-control': 'no-cache' });
+  // Fonts never change between releases; everything else revalidates so an upgrade shows at once.
+  const cache = fileName.startsWith('fonts/') ? 'public, max-age=31536000, immutable' : 'no-cache';
+  response.writeHead(200, { 'content-type': contentType(fileName), 'content-length': info.size, 'cache-control': cache });
   createReadStream(filePath).pipe(response);
 }
 
@@ -248,6 +250,7 @@ function contentType(fileName: string): string {
   if (extension === '.html') return 'text/html; charset=utf-8';
   if (extension === '.js') return 'text/javascript; charset=utf-8';
   if (extension === '.css') return 'text/css; charset=utf-8';
+  if (extension === '.woff2') return 'font/woff2';
   if (extension === '.xlsx') return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
   if (extension === '.csv') return 'text/csv; charset=utf-8';
   return 'application/json; charset=utf-8';

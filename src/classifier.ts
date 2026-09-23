@@ -7,6 +7,8 @@ export interface PageSignals {
   mainText: string;
   redirectCount: number;
   requestedUrl?: string;
+  /** Where the browser ended up, including client-side (script or meta refresh) redirects. */
+  finalUrl?: string;
   error?: string | null;
   timedOut?: boolean;
 }
@@ -26,7 +28,39 @@ export interface ClassificationDecision {
   reasons: string[];
 }
 
-const STRONG_ERROR = /\b(404|410|page not found|not found|page doesn['’]?t exist|page does not exist|nothing here|content (?:is )?unavailable|gone)\b/i;
+/**
+ * Phrases that only appear on missing-page templates. A bare "404" or "gone" is deliberately
+ * absent: restaurants are named "404 Kitchen" and "Gone Fishing", and a brand name in every
+ * title would otherwise turn a whole site into suspected soft 404s.
+ */
+const ERROR_PHRASE = new RegExp([
+  String.raw`\b(?:page|file|url|content|document|article|item|product|post|menu)s?\s+(?:was\s+|could\s+not\s+be\s+|can(?:no|')t\s+be\s+)?not\s+found\b`,
+  String.raw`\b404\s*(?:[-–—:|]\s*)?(?:error|not\s+found|page)\b`,
+  String.raw`\berror\s*(?:[-–—:|]\s*)?404\b`,
+  String.raw`\b410\s*(?:[-–—:|]\s*)?gone\b`,
+  String.raw`^\s*not\s+found\b`,
+  String.raw`\bpage\s+(?:does\s*n[o']t|doesn['’]t|no\s+longer)\s+exists?\b`,
+  String.raw`\b(?:this|that|the)\s+page\s+(?:is\s+)?(?:no\s+longer\s+available|unavailable|(?:has\s+been\s+)?(?:removed|deleted))\b`,
+  String.raw`\b(?:we\s+)?(?:can(?:no|['’])t|could\s*n[o']t|couldn['’]t|could\s+not)\s+(?:seem\s+to\s+)?find\s+(?:the|that|this|what)\s+(?:page|you)`,
+  String.raw`\bnothing\s+(?:was\s+)?found\s+(?:here|at\s+this\s+location)\b`,
+  String.raw`\bcontent\s+(?:is\s+)?unavailable\b`,
+  String.raw`\b(?:you\s+seem\s+(?:a\s+(?:little|bit)\s+)?lost|you['’]re\s+lost|looks\s+like\s+you['’]re\s+lost)\b`,
+].join('|'), 'i');
+
+/** A title segment that is nothing but an error code ("404", "Error 404", "404 | Site"). */
+const BARE_CODE_SEGMENT = /^(?:error\s*)?(?:404|410)(?:\s*error)?$/i;
+
+/** Paths that legitimately resolve to the homepage. */
+const HOME_ALIAS = /^\/(?:index\.(?:html?|php|aspx?|jsp)|default\.aspx?|home(?:page)?|welcome|[a-z]{2}(?:[-_][a-z]{2})?)\/?$/i;
+
+/** The minimum shingle count a template comparison needs to mean anything. */
+const MIN_TEMPLATE_SHINGLES = 3;
+
+export function hasMissingSignal(text: string): boolean {
+  if (!text) return false;
+  if (ERROR_PHRASE.test(text)) return true;
+  return text.split(/\s[|–—•·:]\s|\s-\s/).some((segment) => BARE_CODE_SEGMENT.test(segment.trim()) || ERROR_PHRASE.test(segment));
+}
 
 export function classifyPage(page: PageSignals, baseline?: MissingBaseline | null): ClassificationDecision {
   const reasons: string[] = [];
@@ -34,29 +68,40 @@ export function classifyPage(page: PageSignals, baseline?: MissingBaseline | nul
   if (page.status === null) return { classification: 'network_error', confidence: 1, reasons: [page.error || 'No HTTP response'] };
   if (page.status === 404) return { classification: 'hard_404', confidence: 1, reasons: ['Final HTTP status is 404'] };
   if (page.status === 410) return { classification: 'gone_410', confidence: 1, reasons: ['Final HTTP status is 410'] };
-  if ([401, 403, 429].includes(page.status)) {
+  if ([401, 403, 407, 429, 451].includes(page.status)) {
     return { classification: 'blocked', confidence: 1, reasons: [`Final HTTP status is ${page.status}`] };
   }
   if (page.status >= 500) return { classification: 'server_error', confidence: 1, reasons: [`Final HTTP status is ${page.status}`] };
 
   if (page.status >= 200 && page.status < 300) {
     let score = 0;
-    if (STRONG_ERROR.test(page.title)) {
+    if (hasMissingSignal(page.title)) {
       score += 0.55;
       reasons.push('Page title contains a missing-page signal');
     }
-    if (STRONG_ERROR.test(page.h1)) {
+    if (hasMissingSignal(page.h1)) {
       score += 0.55;
       reasons.push('Primary heading contains a missing-page signal');
     }
-    const mainPrefix = page.mainText.slice(0, 2_500);
-    if (STRONG_ERROR.test(mainPrefix)) {
+    if (ERROR_PHRASE.test(page.mainText.slice(0, 2_500))) {
       score += 0.3;
       reasons.push('Rendered main content contains a missing-page signal');
     }
 
-    if (baseline?.looksMissing) {
-      const similarity = jaccard(tokenize(page.mainText), baseline.tokens);
+    const clientRedirect = Boolean(page.finalUrl && page.requestedUrl && stripHash(page.finalUrl) !== stripHash(page.requestedUrl));
+    const redirected = page.redirectCount > 0 || clientRedirect;
+    if (redirected && redirectsToHomepage(page.requestedUrl, page.finalUrl)) {
+      score += 0.65;
+      reasons.push('A deep URL redirects to the homepage, which search engines treat as a soft 404');
+    }
+
+    const nonRoot = isNonRootPage(page.requestedUrl);
+    // An empty or near-empty page is not evidence of anything: two empty sets are "identical"
+    // to Jaccard, which used to flag every slow client-rendered page as a missing template.
+    const pageTokens = tokenize(page.mainText);
+    const comparable = baseline && baseline.tokens.size >= MIN_TEMPLATE_SHINGLES && pageTokens.size >= MIN_TEMPLATE_SHINGLES;
+    if (comparable && baseline.looksMissing) {
+      const similarity = jaccard(pageTokens, baseline.tokens);
       if (similarity >= 0.9) {
         score += 0.65;
         reasons.push(`Rendered content matches the site's missing-page template (${Math.round(similarity * 100)}%)`);
@@ -64,8 +109,8 @@ export function classifyPage(page: PageSignals, baseline?: MissingBaseline | nul
         score += 0.45;
         reasons.push(`Rendered content resembles the site's missing-page template (${Math.round(similarity * 100)}%)`);
       }
-    } else if (isNonRootPage(page.requestedUrl) && baseline && baseline.status && baseline.status >= 200 && baseline.status < 300 && baseline.tokens.size >= 3) {
-      const similarity = jaccard(tokenize(page.mainText), baseline.tokens);
+    } else if (comparable && nonRoot && baseline.status && baseline.status >= 200 && baseline.status < 300) {
+      const similarity = jaccard(pageTokens, baseline.tokens);
       if (similarity >= 0.95) {
         score += 0.65;
         reasons.push(`Rendered content matches the site's synthetic missing-path baseline (${Math.round(similarity * 100)}%)`);
@@ -75,7 +120,9 @@ export function classifyPage(page: PageSignals, baseline?: MissingBaseline | nul
     if (score >= 0.65) {
       return { classification: 'soft_404_suspected', confidence: Math.min(0.99, round(score)), reasons };
     }
-    if (page.redirectCount > 0) return { classification: 'redirected', confidence: 1, reasons: ['URL redirects to a successful page'] };
+    if (redirected) {
+      return { classification: 'redirected', confidence: 1, reasons: [clientRedirect && !page.redirectCount ? 'Page script or meta refresh redirects to a successful page' : 'URL redirects to a successful page'] };
+    }
     return { classification: 'ok', confidence: 1, reasons: ['Successful rendered page'] };
   }
 
@@ -94,6 +141,30 @@ function isNonRootPage(value: string | undefined): boolean {
   }
 }
 
+/** True when a meaningful, non-home path on a site ends up on that same site's root. */
+function redirectsToHomepage(requested: string | undefined, final: string | undefined): boolean {
+  if (!requested || !final) return false;
+  try {
+    const from = new URL(requested);
+    const to = new URL(final);
+    if (to.pathname !== '/' || from.pathname === '/' || HOME_ALIAS.test(from.pathname)) return false;
+    return from.hostname.replace(/^www\./, '') === to.hostname.replace(/^www\./, '');
+  } catch {
+    return false;
+  }
+}
+
+/** Canonical form for "did the browser move?" — fragments and a trailing slash are not moves. */
+function stripHash(value: string): string {
+  try {
+    const url = new URL(value);
+    url.hash = '';
+    return url.href.replace(/\/$/, '');
+  } catch {
+    return value.replace(/#.*$/, '').replace(/\/$/, '');
+  }
+}
+
 export function makeBaseline(signals: PageSignals): MissingBaseline {
   const combined = `${signals.title} ${signals.h1} ${signals.mainText.slice(0, 2_500)}`;
   return {
@@ -102,7 +173,7 @@ export function makeBaseline(signals: PageSignals): MissingBaseline {
     h1: signals.h1,
     mainText: signals.mainText,
     tokens: tokenize(signals.mainText),
-    looksMissing: signals.status === 404 || signals.status === 410 || STRONG_ERROR.test(combined),
+    looksMissing: signals.status === 404 || signals.status === 410 || hasMissingSignal(signals.title) || hasMissingSignal(signals.h1) || ERROR_PHRASE.test(combined),
   };
 }
 
@@ -125,7 +196,8 @@ export function jaccard(left: Set<string>, right: Set<string>): number {
   if (!left.size && !right.size) return 1;
   if (!left.size || !right.size) return 0;
   let intersection = 0;
-  for (const value of left) if (right.has(value)) intersection += 1;
+  const [small, large] = left.size <= right.size ? [left, right] : [right, left];
+  for (const value of small) if (large.has(value)) intersection += 1;
   return intersection / (left.size + right.size - intersection);
 }
 

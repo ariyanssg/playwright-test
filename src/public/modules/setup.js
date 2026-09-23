@@ -115,7 +115,8 @@ export function initSetup(onCreated) {
     $$('#google-settings input, #google-settings select').forEach((input) => { input.disabled = !selected.includes('google'); });
     $('#google-scope-note').textContent = googleOnly ? 'Only URLs observed in Google results will enter this audit. Website roots are search targets.' : 'Custom audit: Google results are combined with your other selected sources, each labeled separately.';
     $('#launch-detail').textContent = sites + urls + files.length ? `${number(sites + urls + files.length)} inputs · ${selected.length} sources selected` : 'Add a website, exact URL, or file to begin';
-    $('.ready-chip').innerHTML = sites + urls + files.length ? '<span></span>Targets ready' : '<span></span>Set up your audit';
+    $('.ready-chip').innerHTML = sites + urls + files.length ? '<span></span>Ready to start' : '<span></span>Add a target';
+    $('.ready-chip').classList.toggle('ready', Boolean(sites + urls + files.length));
     $$('.preset-bar button').forEach((element) => element.setAttribute('aria-pressed', String(presets[element.dataset.preset].join() === selected.join())));
     // An advanced setting that governs a source or comparison this audit is not running is
     // noise. Only the knobs that will actually affect this run stay on screen.

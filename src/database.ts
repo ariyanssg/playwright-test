@@ -67,6 +67,10 @@ interface HoursRow {
 /** Classifications that count as findings; kept as SQL text so counting never leaves SQLite. */
 const ACTIONABLE_SQL = "('hard_404', 'gone_410', 'soft_404_suspected')";
 const MAX_WARNINGS = 500;
+/** Triage order for the dashboard: definitive breaks, then suspicions, then failures to check. */
+const SEVERITY_ORDER_SQL = `CASE json_extract(result_json, '$.classification')
+  WHEN 'hard_404' THEN 0 WHEN 'gone_410' THEN 1 WHEN 'soft_404_suspected' THEN 2 WHEN 'server_error' THEN 3
+  WHEN 'timeout' THEN 4 WHEN 'network_error' THEN 5 WHEN 'blocked' THEN 6 WHEN 'redirected' THEN 7 ELSE 8 END`;
 
 export class ScanDatabase {
   readonly db: DatabaseSync;
@@ -301,7 +305,8 @@ export class ScanDatabase {
     }
     const where = clauses.join(' AND ');
     const count = this.stmt(`SELECT COUNT(*) AS total FROM candidates WHERE ${where}`).get(...params) as { total: number };
-    const rows = this.stmt(`SELECT * FROM candidates WHERE ${where} ORDER BY normalized_url LIMIT ? OFFSET ?`).all(...params, limit, offset) as unknown as CandidateRow[];
+    // Worst first: whoever opens an audit is looking for what is broken, not for page 1 of "OK".
+    const rows = this.stmt(`SELECT * FROM candidates WHERE ${where} ORDER BY ${SEVERITY_ORDER_SQL}, normalized_url LIMIT ? OFFSET ?`).all(...params, limit, offset) as unknown as CandidateRow[];
     return { total: count.total, items: rows.map(mapCandidate) };
   }
 

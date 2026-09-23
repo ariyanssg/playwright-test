@@ -24,6 +24,9 @@ import { auditProfile, targetKey, type AuditDependencies } from './profile/audit
 import { BusinessProfileConnection } from './profile/providers.js';
 import type { ProfileReport, ProfileTarget } from './profile/model.js';
 
+/** Restaurants whose profile audits may run at once; each launches its own guarded browser. */
+const PROFILE_PARALLEL_TARGETS = 2;
+
 export class ScanService {
   readonly db: ScanDatabase;
   readonly google: GoogleSearchConsole;
@@ -65,9 +68,17 @@ export class ScanService {
     const scan = this.db.getScan(scanId);
     if (!scan) throw new Error(`Unknown scan: ${scanId}`);
     if (scan.status === 'completed' && !scan.options.checkProfile) return scan;
-    if (this.active.has(scanId)) {
-      this.googleWaiters.get(scanId)?.();
-      return this.active.get(scanId)!;
+    const running = this.active.get(scanId);
+    if (running) {
+      // A live run waiting on Google just needs its Continue signal.
+      if (!scan.cancelRequested && !['completed', 'completed_partial', 'cancelled', 'failed'].includes(scan.status)) {
+        this.googleWaiters.get(scanId)?.();
+        return running;
+      }
+      // A run that has already recorded its final status may still be closing its browser.
+      // Returning it here used to swallow a Resume pressed right after Cancel.
+      await running.catch(() => undefined);
+      if (this.active.has(scanId)) return this.active.get(scanId)!;
     }
     this.db.resetForResume(scanId);
     return this.start(scanId);
@@ -220,9 +231,12 @@ export class ScanService {
     } finally {
       this.discoveryControllers.delete(scanId);
       this.googleWaiters.delete(scanId);
-      await releaseBrowser();
     }
-    return this.db.getScan(scanId)!;
+    // Read the final state before the browser shuts down: once the status says "completed",
+    // callers may close the service, and a read after that await would hit a closed database.
+    const final = this.db.getScan(scanId)!;
+    await releaseBrowser();
+    return final;
   }
 
   private async discover(scanId: string, options: ScanOptions): Promise<void> {
@@ -393,14 +407,27 @@ export class ScanService {
     const entry = { expires: Date.now() + 3600000, reports: new Map<string, ProfileReport>() };
     this.liveProfiles.set(scanId, entry);
     const candidates = this.db.listCandidateUrls(scanId);
+    const stored = new Map(this.db.listProfiles(scanId).map(report => [report.targetKey, report]));
+    const pending: Array<[string, ProfileTarget]> = [];
     for (const [key, target] of unique) {
-      const old = this.db.listProfiles(scanId).find(r => r.targetKey === key);
-      if (old?.retention === 'durable' && old.status === 'completed') { entry.reports.set(key, old); continue; }
-      const report = await auditProfile(scanId, target, { mode: options.profileMode, pageLimit: options.profilePageLimit, timeoutMs: options.timeoutMs, hostDelayMs: options.hostDelayMs, country: options.googleCountry.toUpperCase(), tolerance: options.profileHoursTolerance, signal }, candidates, { gbp: this.gbp, imported: options.profileEvidence, ...this.profileDependencies });
-      entry.reports.set(key, report); entry.expires = Date.now() + 3600000;
-      this.db.upsertProfile(scanId, report);
-      this.emit(scanId, `Profile ${new URL(target.url).hostname}: ${report.summary.matches} matches, ${report.summary.mismatches} mismatches, ${report.summary.missing} missing, ${report.summary.unknown} unresolved`);
+      const old = stored.get(key);
+      if (old?.retention === 'durable' && old.status === 'completed') entry.reports.set(key, old);
+      else pending.push([key, target]);
     }
+    // Each restaurant gets its own isolated browser, so a couple of branches can be audited at
+    // once. An injected test browser is shared, and closing it mid-audit would break the other.
+    const width = this.profileDependencies.browser ? 1 : Math.min(PROFILE_PARALLEL_TARGETS, pending.length);
+    let next = 0;
+    await Promise.all(Array.from({ length: width }, async () => {
+      for (let index = next++; index < pending.length; index = next++) {
+        if (signal.aborted) return;
+        const [key, target] = pending[index]!;
+        const report = await auditProfile(scanId, target, { mode: options.profileMode, pageLimit: options.profilePageLimit, timeoutMs: options.timeoutMs, hostDelayMs: options.hostDelayMs, country: options.googleCountry.toUpperCase(), tolerance: options.profileHoursTolerance, signal }, candidates, { gbp: this.gbp, imported: options.profileEvidence, ...this.profileDependencies });
+        entry.reports.set(key, report); entry.expires = Date.now() + 3600000;
+        this.db.upsertProfile(scanId, report);
+        this.emit(scanId, `Profile ${new URL(target.url).hostname}: ${report.summary.matches} matches, ${report.summary.mismatches} mismatches, ${report.summary.missing} missing, ${report.summary.unknown} unresolved`);
+      }
+    }));
   }
 
   private async waitForGoogle(scanId: string, message: string): Promise<void> {

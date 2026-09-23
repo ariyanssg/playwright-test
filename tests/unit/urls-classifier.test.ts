@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { classifyPage, makeBaseline } from '../../src/classifier.js';
 import { isSameSite, normalizeUrl, tryNormalizeUrl, uniqueUrls } from '../../src/urls.js';
+import { interleaveByHost } from '../../src/scanner.js';
 
 test('normalizes domains without destroying indexed path/query details', () => {
   assert.equal(normalizeUrl('site:WWW.Example.com/menu?ref=social#offer'), 'https://www.example.com/menu?ref=social');
@@ -59,4 +60,37 @@ test('detects a catch-all 200 page by similarity to a synthetic missing-path bas
 test('successful redirects are reported without being called broken', () => {
   const decision = classifyPage({ status: 200, title: 'Menu', h1: 'Menu', mainText: 'Full dinner menu', redirectCount: 1 });
   assert.equal(decision.classification, 'redirected');
+});
+
+test('a brand name containing 404 or "gone" is not a missing-page signal', () => {
+  const page = (title: string) => classifyPage({ status: 200, title, h1: title, mainText: 'Dinner service, cocktails and a seasonal menu every night.', redirectCount: 0 });
+  assert.equal(page('404 Kitchen | Nashville').classification, 'ok');
+  assert.equal(page('Gone Fishing Seafood Bar').classification, 'ok');
+  assert.equal(page('Error 404 - Gone Fishing').classification, 'soft_404_suspected');
+  assert.equal(page('Menu | Not Found').classification, 'soft_404_suspected');
+});
+
+test('an empty client-rendered page is not "identical" to an empty missing-page template', () => {
+  const emptyTemplate = makeBaseline({ status: 404, title: '', h1: '', mainText: '', redirectCount: 0 });
+  const decision = classifyPage({ status: 200, title: 'Menu', h1: '', mainText: '', redirectCount: 0, requestedUrl: 'https://example.com/menu' }, emptyTemplate);
+  assert.equal(decision.classification, 'ok');
+});
+
+test('a deep URL that redirects to the homepage is a suspected soft 404, a home alias is not', () => {
+  const home = { status: 200, title: 'Home', h1: 'Welcome', mainText: 'Welcome to the restaurant', redirectCount: 1 };
+  const deep = classifyPage({ ...home, requestedUrl: 'https://example.com/old-menu', finalUrl: 'https://www.example.com/' });
+  assert.equal(deep.classification, 'soft_404_suspected');
+  assert.match(deep.reasons.join(' '), /redirects to the homepage/);
+  assert.equal(classifyPage({ ...home, requestedUrl: 'https://example.com/index.html', finalUrl: 'https://example.com/' }).classification, 'redirected');
+});
+
+test('a script or meta-refresh redirect is reported as a redirect', () => {
+  const decision = classifyPage({ status: 200, title: 'Menu', h1: 'Menu', mainText: 'Full dinner menu', redirectCount: 0, requestedUrl: 'https://example.com/menu-2019', finalUrl: 'https://example.com/menu' });
+  assert.equal(decision.classification, 'redirected');
+  assert.match(decision.reasons[0]!, /script or meta refresh/);
+});
+
+test('hosts are interleaved so one site cannot monopolize the workers', () => {
+  const urls = ['https://a.com/1', 'https://a.com/2', 'https://a.com/3', 'https://b.com/1', 'https://c.com/1'].map((normalizedUrl) => ({ normalizedUrl }));
+  assert.deepEqual(interleaveByHost(urls).map((item) => item.normalizedUrl), ['https://a.com/1', 'https://b.com/1', 'https://c.com/1', 'https://a.com/2', 'https://a.com/3']);
 });

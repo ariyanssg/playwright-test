@@ -17,6 +17,27 @@ export const servicePattern: Record<Service, RegExp> = {
   ordering: /\b(?:order(?:ing)?(?: online| now)?|takeaway|takeout|delivery|click.{0,5}collect)\b/i,
 };
 export interface PageContent { title: string; body: string; names: string[]; addresses: string[]; phones: Array<{raw:string;value:string}>; links: Array<{url:string;label:string}>; headings: string[]; forms: string[]; frames: Array<{url:string;title:string}> }
+/** Service and contact pages of one site read at once after the landing page. */
+const CRAWL_PARALLEL_PAGES = 3;
+
+/**
+ * Waits while a page is still changing, up to `capMs`, instead of a fixed pause: booking and
+ * ordering widgets often render late, but a server-rendered page is ready immediately. The
+ * callback is inline with no named functions (see hours/harvest.ts on the `__name` trap).
+ */
+async function settle(page: Page, capMs: number): Promise<void> {
+  await page.waitForFunction(({ stableMs }) => {
+    const text = document.body?.innerText || '';
+    const holder = window as unknown as { __seo404Link?: { length: number; since: number } };
+    const now = performance.now();
+    if (!holder.__seo404Link || holder.__seo404Link.length !== text.length) {
+      holder.__seo404Link = { length: text.length, since: now };
+      return false;
+    }
+    return document.readyState === 'complete' && text.length > 0 && now - holder.__seo404Link.since >= stableMs;
+  }, { stableMs: 400 }, { timeout: Math.max(250, capMs), polling: 100 }).catch(() => undefined);
+}
+
 export interface WebsiteOptions { pageLimit: number; timeoutMs: number; hostDelayMs: number; signal?: AbortSignal }
 
 /** Test transport is constructor-only: API callers cannot turn off the public-network guard. */
@@ -26,11 +47,17 @@ export class ProfileBrowser {
   private proxy?: Awaited<ReturnType<typeof startPublicProxy>>;
   private robots = new Map<string, { allowed: (url: string) => boolean; delay: number; sitemaps: string[] }>();
   private checked = new Map<string, Promise<LinkCheck>>();
+  private lastStart = new Map<string, Promise<number>>();
   private abort?: () => void;
   constructor(private options: WebsiteOptions, private testAllowLocal = false) {}
-  private async init(): Promise<BrowserContext> {
+  private initializing?: Promise<BrowserContext>;
+  /** Idempotent under concurrent callers, which parallel page and link checks now are. */
+  private init(): Promise<BrowserContext> {
     this.options.signal?.throwIfAborted();
-    if (this.context) return this.context;
+    this.initializing ??= this.launch().catch(error => { this.initializing = undefined; throw error; });
+    return this.initializing;
+  }
+  private async launch(): Promise<BrowserContext> {
     if (!this.testAllowLocal) this.proxy = await startPublicProxy();
     this.browser = await chromium.launch({ headless: true, proxy: this.proxy ? { server: this.proxy.server } : undefined, args: this.proxy ? ['--proxy-bypass-list=<-loopback>'] : [] });
     this.context = await this.browser.newContext({ userAgent: AUDITOR_USER_AGENT, serviceWorkers: 'block', acceptDownloads: false });
@@ -62,7 +89,18 @@ export class ProfileBrowser {
     const policy = await this.policy(url);
     if (!policy.allowed(url)) throw new Error('Blocked by robots.txt or robots unavailable');
     const page = await context.newPage();
-    await page.waitForTimeout(Math.min(policy.delay, 30000)); return page;
+    await this.pace(new URL(url).host, Math.min(policy.delay, 30000)); return page;
+  }
+  /** Spaces page starts per host by the robots/host delay, without sleeping before every page. */
+  private async pace(host: string, delay: number): Promise<void> {
+    const previous = this.lastStart.get(host) ?? Promise.resolve(0);
+    const turn = previous.then(async last => {
+      const wait = Math.max(0, last + delay - Date.now());
+      if (wait) await new Promise(resolve => setTimeout(resolve, wait));
+      return Date.now();
+    });
+    this.lastStart.set(host, turn);
+    await turn;
   }
   async crawl(target: ProfileTarget, suppliedPages: string[] = []): Promise<WebsiteSnapshot> {
     const out: WebsiteSnapshot = { ...emptySnapshot('website'), source: 'website', pages: [], finalUrl: target.url };
@@ -85,26 +123,41 @@ export class ProfileBrowser {
         await response.dispose();
       }
     } catch { incomplete = true; out.warnings.push('Robots or sitemap discovery was unavailable'); }
+    // Pages load a few at a time, but their evidence is applied in queue order, so which page's
+    // value comes "first" never depends on network timing. The landing page runs alone because
+    // it fixes the final host every later link is filtered against.
     while (queue.length && seen.size < this.options.pageLimit) {
       if (this.options.signal?.aborted) { incomplete = true; break; }
-      const item = queue.shift()!;
-      const key = item.url.replace(/#.*$/, ''); if (seen.has(key)) continue; seen.add(key);
-      let page: Page | undefined;
-      try {
-        page = await this.page(item.url);
-        const harvest = await harvestHours(page, item.url, this.options.timeoutMs);
-        if (harvest.error || !harvest.status || harvest.status >= 400) throw new Error(harvest.error || `HTTP ${harvest.status}`);
-        const content = await readContent(page);
-        if (!content.body.trim()) throw new Error('No rendered content');
-        if (out.pages.length === 0) { out.finalUrl = page.url(); fact(out, 'website', page.url(), item.url, 'resolved website landing page'); }
+      const batch: Array<{ url: string; depth: number }> = [];
+      const width = out.pages.length ? CRAWL_PARALLEL_PAGES : 1;
+      while (queue.length && batch.length < width && seen.size < this.options.pageLimit) {
+        const item = queue.shift()!;
+        const key = item.url.replace(/#.*$/, ''); if (seen.has(key)) continue; seen.add(key);
+        batch.push(item);
+      }
+      const loaded = await Promise.all(batch.map(async item => {
+        let page: Page | undefined;
+        try {
+          page = await this.page(item.url);
+          const harvest = await harvestHours(page, item.url, this.options.timeoutMs);
+          if (harvest.error || !harvest.status || harvest.status >= 400) throw new Error(harvest.error || `HTTP ${harvest.status}`);
+          const content = await readContent(page);
+          if (!content.body.trim()) throw new Error('No rendered content');
+          return { item, harvest, content, finalUrl: page.url() };
+        } catch (error) { return { item, error: error instanceof Error ? error.message : 'page failure' }; }
+        finally { await page?.close().catch(() => {}); }
+      }));
+      for (const result of loaded) {
+        if ('error' in result) { incomplete = true; out.warnings.push(`Could not inspect ${result.item.url}: ${result.error}`); continue; }
+        const { item, harvest, content } = result;
+        if (out.pages.length === 0) { out.finalUrl = result.finalUrl; fact(out, 'website', result.finalUrl, item.url, 'resolved website landing page'); }
         out.pages.push(item.url);
         extract(out, harvest, content, target);
         for (const link of content.links) {
           if (!sameHost(link.url, out.finalUrl) || !/^https?:/.test(link.url) || /\.(?:pdf|jpg|png|zip)(?:$|[?#])/i.test(link.url)) continue;
           if (item.depth < 2 && /contact|about|hours|menu|reserv|book|order|location/i.test(`${link.label} ${link.url}`)) queue.push({ url: link.url, depth: item.depth + 1 });
         }
-      } catch (error) { incomplete = true; out.warnings.push(`Could not inspect ${item.url}: ${error instanceof Error ? error.message : 'page failure'}`); }
-      finally { await page?.close().catch(() => {}); }
+      }
     }
     if (queue.some(i => !seen.has(i.url.replace(/#.*$/, '')))) { incomplete = true; out.warnings.push('Website discovery page budget reached'); }
     out.links = out.links.filter((l, i, all) => all.findIndex(x => x.service === l.service && x.url === l.url) === i);
@@ -140,7 +193,7 @@ export class ProfileBrowser {
         await response.dispose(); return result;
       }
       const response = await page.goto(link.url, { waitUntil: 'domcontentloaded', timeout: this.options.timeoutMs });
-      await page.waitForTimeout(Math.min(1000, this.options.timeoutMs / 4));
+      await settle(page, Math.min(1_500, this.options.timeoutMs / 4));
       result.httpStatus = response?.status() ?? null; result.finalUrl = page.url();
       for (let req = response?.request() ?? null; req; req = req.redirectedFrom()) {
         const res = await req.response(); result.redirectChain.unshift({ url: req.url(), status: res?.status() ?? null, location: res?.headers()['location'] });
@@ -192,7 +245,7 @@ export class ProfileBrowser {
   }
   async close(): Promise<void> {
     if (this.abort) this.options.signal?.removeEventListener('abort', this.abort);
-    await this.browser?.close().catch(() => {}); await this.proxy?.close(); this.browser = undefined; this.context = undefined;
+    await this.browser?.close().catch(() => {}); await this.proxy?.close(); this.browser = undefined; this.context = undefined; this.initializing = undefined;
   }
 }
 
@@ -253,7 +306,13 @@ export function extract(out: WebsiteSnapshot, harvest: HoursHarvest, content: Pa
     return valid;
   }) }));
   const validMicrodata = { ...harvest.microdata, specs: harvest.microdata.specs.filter(s => parseClockTime(s.opens) !== null && parseClockTime(s.closes) !== null) };
-  const hours = [...parseJsonLdHours(validNodes.map(n => JSON.stringify(n))), parseMicrodataHours(validMicrodata), parseTextHours(harvest.textBlocks.length ? harvest.textBlocks : [content.body])].filter(x => x !== null);
+  // Within one page the most structured layer wins outright, as in the hours comparison: a
+  // footer read as text next to exact JSON-LD is not a second opinion, and treating the two as
+  // rival sources raised "website disagrees with itself" conflicts that were only parse noise.
+  const structured = parseJsonLdHours(validNodes.map(n => JSON.stringify(n)));
+  const microdata = structured.length ? null : parseMicrodataHours(validMicrodata);
+  const text = structured.length || microdata ? null : parseTextHours(harvest.textBlocks.length ? harvest.textBlocks : [content.body]);
+  const hours = structured.length ? structured : [microdata ?? text].filter(x => x !== null);
   for (const h of hours) fact(out, 'hours', h.weekly, url, h.method, h.raw.join('; '), h.confidence);
   for (const service of SERVICES) {
     const links = [...content.links, ...content.frames.map(f => ({ url: f.url, label: f.title }))].filter(l => servicePattern[service].test(`${l.label} ${new URL(l.url, url).pathname}`) && /^https?:/.test(l.url));

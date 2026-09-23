@@ -26,7 +26,7 @@ router = initRouter(async (view, id) => {
     if (!location.hash.startsWith('#audit-workspace')) return;
     await audit.select(id || audit.id() || workspace.latest());
   }
-});
+}, () => workspace.scans());
 void loadConnections(applyProviderStatus).catch(showError);
 $('#dismiss-toast').addEventListener('click', dismissToast);
 dismissToast();

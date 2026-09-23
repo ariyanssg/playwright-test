@@ -9,10 +9,15 @@ const DAY_WORD = '(?:sundays?|mondays?|tuesdays?|wednesdays?|thursdays?|fridays?
 const GROUP_WORD = '(?:daily|every ?day|weekdays?|weekends?|all week)';
 const DAY_SEPARATOR = '(?:\\s*[-–—,&\\/]\\s*|\\s+(?:through|thru|to|and)\\s+)';
 const DAY_SPEC = `(?:${GROUP_WORD}|${DAY_WORD}(?:${DAY_SEPARATOR}${DAY_WORD})*)`;
-const DAY_LINE = new RegExp(`^\\s*(${DAY_SPEC})\\b\\s*(?:[:.–—-]|\\bis\\b|\\bare\\b)?\\s*(.*)$`, 'i');
+const DAY_LINE = new RegExp(`^\\s*(${DAY_SPEC})\\b\\s*([:.–—-]|\\bis\\b|\\bare\\b)?\\s*(.*)$`, 'i');
+/** A lone abbreviation ("We", "Sun", "Sat") is also an ordinary word, so it only counts as a day
+ *  when a time or closure follows it directly: "We are open 5-10" is not Wednesday's hours. */
+const LONE_ABBREVIATION = /^(?:su|mo|tu|we|th|fr|sa|sun|mon|tues?|weds?|thurs?|thu|fri|sat)\.?$/i;
+const TIME_FOLLOWS = /^(?:(?:from|opens?|opening|hours?)\b\s*:?\s*)?(?:\d|noon\b|midnight\b|closed\b|open\s*24|24\s*(?:\/|hours))/i;
 const SPEC_SCANNER = /\b(through|thru|to)\b|([-–—])|([a-z]{2,10}\.?)/gi;
 
-const CLOCK = '\\d{1,2}(?::\\d{2})?\\s*(?:a\\.?m\\.?|p\\.?m\\.?)?|noon|midnight';
+// UK sites commonly write 11.30am; a dot is accepted as the minute separator.
+const CLOCK = '\\d{1,2}(?:[:.]\\d{2})?\\s*(?:a\\.?m\\.?|p\\.?m\\.?)?|noon|midnight';
 const RANGE = new RegExp(`(${CLOCK})\\s*(?:[-–—]|to|until|till|thru|through)\\s*(${CLOCK})`, 'gi');
 
 const PHONE = /\(\d{3}\)\s*\d{3}|\d{3}[-.–]\d{3}[-.–]\d{4}/;
@@ -41,9 +46,12 @@ export function parseTextHours(blocks: readonly string[]): HoursCandidate | null
       const match = DAY_LINE.exec(line);
       let days: DayIndex[] | null = null;
       let rest = line;
-      if (match?.[1]) {
+      const lone = match?.[1] ? LONE_ABBREVIATION.test(match[1].trim()) : false;
+      const connector = (match?.[2] ?? '').trim().toLowerCase();
+      const plausible = !lone || !(match?.[3] ?? '').trim() || (connector !== 'is' && connector !== 'are' && TIME_FOLLOWS.test((match?.[3] ?? '').trim()));
+      if (match?.[1] && plausible) {
         days = parseDaySpec(match[1]);
-        rest = (match[2] ?? '').trim();
+        rest = (match[3] ?? '').trim();
         // A line that is only a day heading applies to the line that follows it.
         if (days && !rest) {
           pendingDays = days;
@@ -65,13 +73,15 @@ export function parseTextHours(blocks: readonly string[]): HoursCandidate | null
         }
         continue;
       }
-      if (CLOSED.test(rest)) {
-        raw.push(line);
-        for (const day of days) stated.add(day);
+      // "11am-10pm (kitchen closed 3-5pm)" still states opening hours; only the break is dropped.
+      const ranges = extractRanges(rest, true);
+      if (!ranges?.length) {
+        if (CLOSED.test(rest)) {
+          raw.push(line);
+          for (const day of days) stated.add(day);
+        }
         continue;
       }
-      const ranges = extractRanges(rest);
-      if (!ranges?.length) continue;
       raw.push(line);
       for (const day of days) {
         stated.add(day);
@@ -116,10 +126,14 @@ function parseDaySpec(spec: string): DayIndex[] | null {
   return days.size ? [...days] : null;
 }
 
-function extractRanges(text: string): Array<[number, number]> | null {
+/** A range that directly follows "closed" is a break inside the day, not an opening. */
+const CLOSED_BEFORE = /\bclosed\b[^\d]{0,25}$/i;
+
+function extractRanges(text: string, skipBreaks = false): Array<[number, number]> | null {
   const ranges: Array<[number, number]> = [];
   RANGE.lastIndex = 0;
   for (let match = RANGE.exec(text); match; match = RANGE.exec(text)) {
+    if (skipBreaks && CLOSED_BEFORE.test(text.slice(0, match.index))) continue;
     const resolved = resolveRange(match[1] ?? '', match[2] ?? '');
     if (!resolved) return null;
     ranges.push(resolved);
@@ -139,7 +153,7 @@ function parseLoose(token: string): LooseTime | null {
   const value = token.trim().toLowerCase();
   if (value === 'noon') return { hour: 12, minute: 0, meridiem: 'pm', keyword: 'noon' };
   if (value === 'midnight') return { hour: 0, minute: 0, meridiem: 'am', keyword: 'midnight' };
-  const match = /^(\d{1,2})(?::(\d{2}))?\s*(a\.?m\.?|p\.?m\.?)?$/.exec(value);
+  const match = /^(\d{1,2})(?:[:.](\d{2}))?\s*(a\.?m\.?|p\.?m\.?)?$/.exec(value);
   if (!match?.[1]) return null;
   const hour = Number(match[1]);
   const minute = Number(match[2] ?? '0');
@@ -184,5 +198,23 @@ function resolveRange(startToken: string, endToken: string): [number, number] | 
     return [start, applyMeridiem(right, 'am')];
   }
   if (left.hour > 24 || right.hour > 24) return null;
+  if (!endKeyword && isTwelveHourGuess(startToken, left) && isTwelveHourGuess(endToken, right)) {
+    // Without am/pm, "11-10" read literally is a 23-hour day and "5-11" a 5 AM opening; neither
+    // is what a restaurant means. An opening of 1-5 is afternoon, and a close that would land at
+    // or before the opening is PM. A morning range that still reads forward ("7-11") is kept.
+    const l = left.hour % 12, r = right.hour % 12;
+    const openPm = l >= 1 && l < 6;
+    const open = (openPm ? l + 12 : left.hour === 12 ? 12 : l) * 60 + left.minute;
+    const literalClose = r * 60 + right.minute;
+    const pmClose = (r + 12) * 60 + right.minute;
+    const close = openPm ? (pmClose > open ? pmClose : literalClose)
+      : literalClose > open && right.hour !== 12 ? literalClose : pmClose;
+    return [open, close];
+  }
   return [left.hour * 60 + left.minute, endKeyword ?? right.hour * 60 + right.minute];
+}
+
+/** No meridiem, no 24-hour tell (a leading zero or an hour past 12). */
+function isTwelveHourGuess(token: string, time: LooseTime): boolean {
+  return !time.meridiem && !time.keyword && time.hour >= 1 && time.hour <= 12 && !token.trim().startsWith('0');
 }

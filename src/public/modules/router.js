@@ -1,6 +1,6 @@
-import { $, $$ } from './ui.js';
+import { $, $$, escapeHtml as e, statusLabel, targetLabel } from './ui.js';
 const views = { overview: 'Overview', 'new-audit': 'New audit', 'audit-workspace': 'Findings', 'run-history': 'Audit history', connections: 'Connections' };
-export function initRouter(onNavigate) {
+export function initRouter(onNavigate, listAudits = () => []) {
   const sidebar = $('#sidebar');
   const mobile = matchMedia('(max-width: 760px)');
   let open = false;
@@ -55,29 +55,34 @@ export function initRouter(onNavigate) {
     const list = $('#command-list');
     if (!dialog || !input || !list || dialog.dataset.ready) return;
     dialog.dataset.ready = 'true';
-    const commands = [
-      { title: 'New audit', hint: 'Set targets and launch', run() { location.hash = '#new-audit'; } },
-      { title: 'Open findings', hint: 'Latest audit results', run() { location.hash = '#audit-workspace'; } },
-      { title: 'Audit history', hint: 'Reopen any report', run() { location.hash = '#run-history'; } },
-      { title: 'Connections', hint: 'Data sources', run() { location.hash = '#connections'; } },
-      { title: 'Back to overview', hint: 'Workspace at a glance', run() { location.hash = '#overview'; } },
+    const pages = [
+      { title: 'New audit', hint: 'Set targets and start', run() { location.hash = '#new-audit'; } },
+      { title: 'Findings', hint: 'The audit you opened last', run() { location.hash = '#audit-workspace'; } },
+      { title: 'Audit history', hint: 'Every saved audit', run() { location.hash = '#run-history'; } },
+      { title: 'Connections', hint: 'Data sources and keys', run() { location.hash = '#connections'; } },
+      { title: 'Overview', hint: 'Latest audits', run() { location.hash = '#overview'; } },
     ];
+    // Recent audits are jump targets too: the palette is the fastest way back to a report.
+    const commands = () => [...pages, ...listAudits().slice(0, 30).map((scan) => ({ title: targetLabel(scan), hint: `${statusLabel(scan.status)} · ${scan.findings} broken · ${scan.id}`, run() { location.hash = `#audit-workspace?run=${encodeURIComponent(scan.id)}`; } }))];
     let selected = 0;
-    let items = commands;
+    let items = pages;
     const paint = () => {
-      list.innerHTML = items.map((item, index) => `<li><button role="option" data-i="${index}" aria-selected="${index === selected}"><span><b>${item.title}</b><small>${item.hint}</small></span><span class="command-kbd">${index === selected ? 'Enter' : `#${index + 1}`}</span></button></li>`).join('') || '<li><p class="muted" style="padding:12px">No matching actions.</p></li>';
+      list.innerHTML = items.map((item, index) => `<li><button type="button" role="option" data-i="${index}" aria-selected="${index === selected}"><span><b>${e(item.title)}</b><small>${e(item.hint)}</small></span><span class="command-kbd">${index === selected ? 'Enter ↵' : ''}</span></button></li>`).join('') || '<li class="command-empty">No matching pages or audits.</li>';
+      list.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest' });
     };
-    const open = () => { items = commands; selected = 0; input.value = ''; paint(); if (!dialog.open) dialog.showModal(); input.focus(); };
+    const filterItems = () => {
+      const q = input.value.trim().toLowerCase();
+      const all = commands();
+      items = !q ? all.slice(0, 12) : all.filter((item) => `${item.title} ${item.hint}`.toLowerCase().includes(q)).slice(0, 30);
+      selected = 0; paint();
+    };
+    const open = () => { input.value = ''; filterItems(); if (!dialog.open) dialog.showModal(); input.focus(); };
     document.addEventListener('keydown', (event) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); if (dialog.open) dialog.close(); else open(); }
     });
     const searchBtn = $('#global-search');
     if (searchBtn) searchBtn.addEventListener('click', open);
-    input.addEventListener('input', () => {
-      const q = input.value.trim().toLowerCase();
-      items = !q ? commands : commands.filter((item) => `${item.title} ${item.hint}`.toLowerCase().includes(q));
-      selected = 0; paint();
-    });
+    input.addEventListener('input', filterItems);
     input.addEventListener('keydown', (event) => {
       if (event.key === 'ArrowDown') { event.preventDefault(); selected = Math.min(items.length - 1, selected + 1); paint(); }
       else if (event.key === 'ArrowUp') { event.preventDefault(); selected = Math.max(0, selected - 1); paint(); }
@@ -88,6 +93,7 @@ export function initRouter(onNavigate) {
       if (!button) return;
       const item = items[Number(button.dataset.i)]; dialog.close(); item?.run();
     });
+    dialog.addEventListener('click', (event) => { if (event.target === dialog) dialog.close(); });
     paint();
   }
   return { go(view, run) { const hash = `#${view}${run ? `?run=${encodeURIComponent(run)}` : ''}`; if (location.hash === hash) render(true); else location.hash = hash; } };

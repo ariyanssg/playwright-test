@@ -1,5 +1,5 @@
 import type { DayIndex, OpenInterval } from '../types.js';
-import { dayIndexFromToken, expandDayRange, intervalFromDayTimes, makeWeeklyHours, parseClockTime } from './schedule.js';
+import { DAY_NAMES, dayIndexFromToken, expandDayRange, intervalFromDayTimes, makeWeeklyHours, parseClockTime } from './schedule.js';
 import type { HoursCandidate, SiteIdentity } from './model.js';
 
 const MAX_DEPTH = 8;
@@ -55,13 +55,36 @@ export function parseJsonLdIdentity(scripts: readonly string[]): SiteIdentity | 
 /**
  * The schema.org shorthand grammar: a day specification followed by one or more
  * time ranges, e.g. `Mo-Fr 11:00-22:00` or `Mo-We,Fr 11:00-14:00,17:00-22:00`.
+ * Sites routinely pack a whole week into one value (`Mo-Sa 11:00-23:00 Su 12:00-22:00`,
+ * or groups separated by `;`), so every group is read; one unreadable group rejects the
+ * value rather than publishing a partial week as if it were complete.
  */
 export function parseOpeningHoursString(value: string): { intervals: OpenInterval[]; days: DayIndex[] } | null {
-  const match = /^\s*([A-Za-z][A-Za-z,\-\s.]*?)\s+([\d:,\s-]+)\s*$/.exec(value);
-  if (!match?.[1] || !match[2]) return null;
+  const intervals: OpenInterval[] = [];
+  const days = new Set<DayIndex>();
+  let groups = 0;
+  for (const chunk of value.split(/[;\n]+/)) {
+    if (!chunk.trim()) continue;
+    const pattern = /([A-Za-z][A-Za-z,\-\s.]*?)\s*(?::\s*)?\s((?:\d[\d:,\s-]*?\d)|closed|off)(?=\s*,?\s*[A-Za-z]|\s*$)/gi;
+    let consumed = 0;
+    for (let match = pattern.exec(chunk); match; match = pattern.exec(chunk)) {
+      if (chunk.slice(consumed, match.index).replace(/[\s,]/g, '')) return null;
+      consumed = match.index + match[0].length;
+      const group = parseGroup(match[1]!, match[2]!);
+      if (!group) return null;
+      groups += 1;
+      intervals.push(...group.intervals);
+      for (const day of group.days) days.add(day);
+    }
+    if (chunk.slice(consumed).replace(/[\s,]/g, '')) return null;
+  }
+  if (!groups || !days.size) return null;
+  return { intervals, days: [...days] };
+}
 
+function parseGroup(dayPart: string, timePart: string): { intervals: OpenInterval[]; days: DayIndex[] } | null {
   const days: DayIndex[] = [];
-  for (const piece of match[1].split(',')) {
+  for (const piece of dayPart.split(',')) {
     const bounds = piece.split('-').map((item) => item.trim()).filter(Boolean);
     if (bounds.length === 1) {
       const day = dayIndexFromToken(bounds[0]!);
@@ -72,14 +95,15 @@ export function parseOpeningHoursString(value: string): { intervals: OpenInterva
       const to = dayIndexFromToken(bounds[1]!);
       if (from === null || to === null) return null;
       days.push(...expandDayRange(from, to));
-    } else {
+    } else if (bounds.length) {
       return null;
     }
   }
   if (!days.length) return null;
 
   const intervals: OpenInterval[] = [];
-  for (const range of match[2].split(',')) {
+  if (/^(?:closed|off)$/i.test(timePart.trim())) return { intervals, days: [...new Set(days)] };
+  for (const range of timePart.split(',')) {
     const parts = range.split('-').map((item) => item.trim()).filter(Boolean);
     if (parts.length !== 2) return null;
     const opens = parseClockTime(parts[0]!);
@@ -107,7 +131,7 @@ function applySpecification(spec: unknown, intervals: OpenInterval[], stated: Se
 
   const opensText = text(node['opens']);
   const closesText = text(node['closes']);
-  raw.push(`${days.map((day) => day).join('/')} ${opensText ?? '?'}-${closesText ?? '?'}`);
+  raw.push(`${days.map((day) => DAY_NAMES[day]).join('/')} ${opensText ?? '?'}-${closesText ?? '?'}`);
   for (const day of days) stated.add(day);
 
   if (!opensText || !closesText) return;

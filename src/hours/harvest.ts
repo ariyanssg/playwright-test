@@ -35,7 +35,21 @@ const BLOCK_SELECTOR = '[class*="hour" i], [id*="hour" i], [class*="open" i], [i
 export async function harvestHours(page: Page, url: string, timeoutMs: number): Promise<HoursHarvest> {
   try {
     const response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: timeoutMs });
-    await page.waitForTimeout(Math.min(750, Math.max(250, Math.floor(timeoutMs / 4))));
+    // Structured hours or a rendered "Mon … 11am" line means the page is ready now. Otherwise
+    // wait only while the page is still changing, instead of a fixed pause on every page.
+    await page.waitForFunction(({ stableMs }) => {
+      if (document.querySelector('[itemprop="openingHours"], [itemtype$="OpeningHoursSpecification"]')) return true;
+      if (Array.from(document.querySelectorAll('script[type="application/ld+json"]')).some((node) => /openingHours/i.test(node.textContent || ''))) return true;
+      const text = document.body?.innerText || '';
+      if (/\b(?:mon|tue|wed|thu|fri|sat|sun|daily)[a-z]*\.?\b[^\n]{0,40}\d{1,2}(?:[:.]\d{2})?\s*(?:am|pm|a\.m|p\.m)?\s*[-–—]/i.test(text)) return true;
+      const holder = window as unknown as { __seo404Harvest?: { length: number; since: number } };
+      const now = performance.now();
+      if (!holder.__seo404Harvest || holder.__seo404Harvest.length !== text.length) {
+        holder.__seo404Harvest = { length: text.length, since: now };
+        return false;
+      }
+      return document.readyState === 'complete' && now - holder.__seo404Harvest.since >= stableMs;
+    }, { stableMs: 400 }, { timeout: Math.min(1_500, Math.max(250, Math.floor(timeoutMs / 4))), polling: 100 }).catch(() => undefined);
     let evaluateError: string | null = null;
     const content = await page.evaluate(({ selector, maxScripts, maxJsonBytes, maxBlocks, maxBlockChars, maxBodyChars }) => {
       const jsonLd: string[] = [];

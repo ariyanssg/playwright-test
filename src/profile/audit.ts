@@ -6,6 +6,8 @@ import { CORE_FIELDS, emptySnapshot, first, SERVICES, type ImportedProfile, type
 import { BusinessProfileConnection, fromImported, managedProfiles, publicProfiles, type ApiRead } from './providers.js';
 import { ProfileBrowser } from './website.js';
 
+const LINK_CHECK_PARALLEL = 4;
+
 export interface AuditOptions { mode: ProfileMode; pageLimit: number; timeoutMs: number; hostDelayMs: number; country: string; tolerance: number; signal?: AbortSignal }
 export interface AuditDependencies { browser?: Pick<ProfileBrowser, 'crawl' | 'check' | 'close'>; publicRead?: ApiRead; managedRead?: ApiRead; imported?: ImportedProfile[]; gbp?: BusinessProfileConnection }
 export function targetKey(target: ProfileTarget): string { return createHash('sha256').update(JSON.stringify([target.url, target.placeId || '', target.gbpLocation || '', target.address || ''])).digest('hex').slice(0, 24); }
@@ -42,10 +44,18 @@ export async function auditProfile(auditId: string, target: ProfileTarget, optio
     const websiteDestinations = [website, ...(verified ? [google] : [])].flatMap(s => {
       const url = first<string>(s, 'website'); return url ? [{ service: 'website' as const, url, source: s.source, label: 'Official website' }] : [];
     });
-    for (const link of [...websiteDestinations, ...website.links, ...(verified ? google.links : [])]) {
-      if (options.signal?.aborted) break;
-      links.push(await browser.check(link, target, website));
-    }
+    // Service destinations are mostly on different hosts (booking and ordering platforms), so
+    // they are checked a few at a time; results keep their original order.
+    const destinations = [...websiteDestinations, ...website.links, ...(verified ? google.links : [])];
+    const checked: Array<LinkCheck | undefined> = [];
+    let next = 0;
+    await Promise.all(Array.from({ length: Math.min(LINK_CHECK_PARALLEL, destinations.length) }, async () => {
+      for (let index = next++; index < destinations.length; index = next++) {
+        if (options.signal?.aborted) return;
+        checked[index] = await browser.check(destinations[index]!, target, website);
+      }
+    }));
+    links = checked.filter((item): item is LinkCheck => item !== undefined);
     const checks = compareProfiles(website, google, verified, options.country, options.tolerance, links);
     if (verified) for (const extra of extras) for (const field of ['name', 'phone', 'website', 'hours']) {
       const a = first(google, field), b = first(extra, field);
