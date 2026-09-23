@@ -3,7 +3,7 @@ import { DAY_INDEXES, DAY_NAMES } from '../hours/schedule.js';
 import type { OpenInterval, WeeklyHours } from '../types.js';
 import { addressMatch, dayIntervals, formatIntervals, phone, sameHost, textKey, urlKey } from './normalize.js';
 import { CORE_FIELDS, emptySnapshot, first, SERVICES, type ImportedProfile, type ProfileCheck, type ProfileMode, type ProfileReport, type ProfileSnapshot, type ProfileTarget, type WebsiteSnapshot, type Fact, type LinkCheck } from './model.js';
-import { BusinessProfileConnection, fromImported, managedProfiles, publicProfiles, type ApiRead } from './providers.js';
+import { BusinessProfileConnection, fromImported, managedProfiles, publicProfiles, serperMapsProfiles, type ApiRead } from './providers.js';
 import { ProfileBrowser } from './website.js';
 
 const LINK_CHECK_PARALLEL = 4;
@@ -18,6 +18,7 @@ export async function auditProfile(auditId: string, target: ProfileTarget, optio
   let website: WebsiteSnapshot = { ...emptySnapshot('website'), source: 'website', finalUrl: target.url, pages: [] };
   let candidates: ProfileSnapshot[] = [], extras: ProfileSnapshot[] = [];
   const warnings: string[] = [];
+  let acquisitionError = '';
   let links: LinkCheck[] = [];
   try {
     website = await browser.crawl(target, pages);
@@ -34,11 +35,13 @@ export async function auditProfile(auditId: string, target: ProfileTarget, optio
         } else {
           const query = [target.name || first<string>(website, 'name'), target.address || first<string>(website, 'address')].filter(Boolean).join(', ');
           if (!target.placeId && !query) throw new Error('Restaurant identity could not be extracted; provide a name/address or Place ID');
-          candidates = await publicProfiles(query, target.placeId, options.signal, deps.publicRead);
+          candidates = await publicListing(query, target.placeId, options, deps, warnings);
         }
-      } catch (error) { warnings.push(error instanceof Error ? error.message : 'Google acquisition failed'); }
+      } catch (error) { acquisitionError = error instanceof Error ? error.message : 'Google acquisition failed'; warnings.push(`${LISTING_UNAVAILABLE}${acquisitionError}`); }
     }
     const resolution = resolveIdentity(target, website, candidates, options.country);
+    // Say why there is nothing to compare, not merely that nothing was acquired.
+    if (!candidates.length && acquisitionError) resolution.identity = { status: 'unmatched', placeId: null, reason: `Google listing could not be read: ${acquisitionError}` };
     const google = resolution.snapshot ?? emptySnapshot(options.mode === 'public' ? 'places' : options.mode === 'managed' ? 'gbp_managed' : 'imported', 'No verified Google branch; comparisons unavailable');
     const verified = resolution.identity.status === 'verified';
     const websiteDestinations = [website, ...(verified ? [google] : [])].flatMap(s => {
@@ -69,9 +72,38 @@ export async function auditProfile(auditId: string, target: ProfileTarget, optio
       retention: options.mode === 'imported' ? 'durable' : 'session_only', rules: { version: '1.0', hoursToleranceMinutes: options.tolerance, country: options.country },
     };
     if (report.status !== 'cancelled' && (report.summary.unknown > 0 || !verified || website.warnings.length)) report.status = 'completed_partial';
-    if (report.retention === 'session_only') report.warnings.push('Google-derived values and comparisons are available in this live session only. Saved exports redact them; resume refreshes Google observations.');
+    if (report.retention === 'session_only') report.warnings.push('Google values and comparisons are shown live only and are not saved (Google’s terms). They stay on screen for an hour or until the dashboard restarts; Refresh profile audit fetches them again.');
     return report;
   } finally { await browser.close(); }
+}
+
+/** Prefix that marks a failure to read Google, which saved reports keep (it holds no Google data). */
+export const LISTING_UNAVAILABLE = 'Google listing unavailable: ';
+
+/**
+ * Reads the public listing from the cheapest source that works: Serper's Google Maps data when
+ * SERPER_API_KEY is set, then the Places API. A source that fails is noted, never silent.
+ */
+async function publicListing(query: string, placeId: string | undefined, options: AuditOptions, deps: AuditDependencies, warnings: string[]): Promise<ProfileSnapshot[]> {
+  const failures: string[] = [];
+  const serper = !deps.publicRead && process.env.SERPER_API_KEY && query;
+  const places = Boolean(deps.publicRead || process.env.GOOGLE_MAPS_API_KEY);
+  if (!serper && !places) throw new Error('Reading the public Google listing needs SERPER_API_KEY (cheapest) or GOOGLE_MAPS_API_KEY (Places API New) in .env.');
+  if (serper) {
+    try {
+      const found = await serperMapsProfiles(query, options.country, placeId, options.signal);
+      if (found.length) return found;
+      failures.push(`Google Maps (via Serper) found no listing for "${query}"`);
+    } catch (error) { failures.push(`Google Maps via Serper: ${error instanceof Error ? error.message : String(error)}`); }
+  }
+  if (places) {
+    try {
+      const found = await publicProfiles(query, placeId, options.signal, deps.publicRead);
+      for (const failure of failures) warnings.push(`${failure}; used Google Places instead`);
+      return found;
+    } catch (error) { failures.push(`Google Places: ${error instanceof Error ? error.message : String(error)}`); }
+  }
+  throw new Error(failures.join(' · '));
 }
 
 export function resolveIdentity(target: ProfileTarget, website: ProfileSnapshot, candidates: ProfileSnapshot[], country: string): { identity: ProfileReport['identity']; snapshot?: ProfileSnapshot } {
@@ -117,13 +149,18 @@ export function compareProfiles(website: ProfileSnapshot, google: ProfileSnapsho
     const wf = website.facts.filter(f => f.field === field), gf = google.facts.filter(f => f.field === field);
     const key = (f: Fact) => field === 'phone' ? phone(String(f.value), country) : field === 'website' ? urlKey(String(f.value)) : textKey(String(f.value));
     const keys = [...new Set(wf.map(key).filter(Boolean))];
-    if (keys.length > 1 && field !== 'website') { checks.push({ ...check, verdict: 'source_conflict', reason: 'Website publishes multiple different values; no source was silently selected', severity: 'error' }); continue; }
-    if (!wf[0] || !gf[0]) { checks.push({ ...check, reason: 'Field could not be parsed' }); continue; }
-    const w = String(wf[0].value).trim(), g = String(gf[0].value).trim();
+    // Restaurants routinely list a second line (takeaway, bookings). When Google shows one of
+    // the website's numbers, that is agreement, not a conflict between the site's own values.
+    const googleKey = gf[0] ? key(gf[0]) : null;
+    const agreeing = field === 'phone' && googleKey ? wf.find(f => key(f) === googleKey) : undefined;
+    if (keys.length > 1 && field !== 'website' && !agreeing) { checks.push({ ...check, verdict: 'source_conflict', reason: 'Website publishes multiple different values; no source was silently selected', severity: 'error' }); continue; }
+    const websiteFact = agreeing ?? wf[0];
+    if (!websiteFact || !gf[0]) { checks.push({ ...check, reason: 'Field could not be parsed' }); continue; }
+    const w = String(websiteFact.value).trim(), g = String(gf[0].value).trim();
     const final = (url: string) => links.find(l => l.url === url && l.health === 'functional')?.finalUrl;
-    const semantic = field === 'website' ? Boolean(urlKey(w) === urlKey(g) || (final(w) && final(w) === final(g))) : Boolean(key(wf[0]) && key(wf[0]) === key(gf[0]));
+    const semantic = field === 'website' ? Boolean(urlKey(w) === urlKey(g) || (final(w) && final(w) === final(g))) : Boolean(key(websiteFact) && key(websiteFact) === key(gf[0]));
     const result = finish(check, w === g, semantic);
-    if (field === 'name' && wf[0].confidence === 'low') { result.verdict = 'unverifiable'; result.reason = 'Restaurant name inferred from page title; visible branding needs verification'; }
+    if (field === 'name' && websiteFact.confidence === 'low') { result.verdict = 'unverifiable'; result.reason = 'Restaurant name inferred from page title; visible branding needs verification'; }
     checks.push(result);
   }
   const wh = first<WeeklyHours>(website, 'hours'), gh = first<WeeklyHours>(google, 'hours');
@@ -174,7 +211,7 @@ export function summarize(checks: ProfileCheck[], links: LinkCheck[], verified: 
   const count = (v: string) => checks.filter(c => c.verdict === v).length;
   const unknown = count('unverifiable'), missing = checks.filter(c => c.verdict.startsWith('missing_')).length;
   const mismatches = count('mismatch') + count('source_conflict');
-  return { total: checks.length, conclusive: checks.length - unknown, matches: count('match'), equivalent: count('equivalent'), mismatches, missing, unknown, brokenLinks: links.filter(l => ['hard_404', 'gone_410', 'soft_404_suspected', 'wrong_destination', 'wrong_location', 'server_error'].includes(l.health)).length, outcome: !verified || unknown ? 'incomplete' : mismatches || missing || count('equivalent') ? 'issues' : 'pass' };
+  return { total: checks.length, conclusive: checks.length - unknown, matches: count('match'), equivalent: count('equivalent'), mismatches, missing, unknown, brokenLinks: links.filter(l => ['hard_404', 'gone_410', 'soft_404_suspected', 'wrong_destination', 'wrong_location', 'server_error'].includes(l.health)).length, outcome: !verified ? 'incomplete' : mismatches || missing ? 'issues' : unknown ? 'incomplete' : count('equivalent') ? 'issues' : 'pass' };
 }
 
 /** Google API content and derived results are deliberately excluded from durable artifacts. */
@@ -184,8 +221,15 @@ export function durableReport(report: ProfileReport): ProfileReport {
   copy.sources = copy.sources.filter(s => s.source === 'website');
   copy.links = copy.links.filter(l => l.source === 'website');
   copy.checks = copy.checks.filter(c => !c.field.startsWith('google_updates.')).map(c => ({ ...c, google: [], evidence: c.evidence.filter(f => f.source === 'website'), verdict: 'unverifiable', exactMatch: null, semanticMatch: null, reason: 'Google-derived comparison omitted from stored report; refresh the live audit', recommendation: 'Resume this audit to reacquire Google observations.' }));
-  copy.identity = { status: 'unverified', placeId: report.identity.placeId, reason: 'Identity evidence is session-only; refresh to verify' };
+  // A failure to read Google holds no Google content, so it stays: otherwise a saved report shows
+  // every row "unresolved" with no hint that, say, the API key was rejected.
+  const failed = report.identity.status === 'unmatched' && report.identity.reason.startsWith('Google listing could not be read');
+  copy.identity = failed ? { ...report.identity } : { status: 'unverified', placeId: report.identity.placeId, reason: 'Google values are not saved. Use Refresh profile audit to fetch them again.' };
   copy.summary = summarize(copy.checks, copy.links, false); copy.status = 'completed_partial'; copy.retention = 'redacted';
-  copy.warnings = ['Google API values and derived comparisons are omitted from durable artifacts. Live dashboard results expire after one hour or server restart.'];
+  copy.warnings = [
+    ...report.warnings.filter(w => w.startsWith(LISTING_UNAVAILABLE)),
+    'Google values and comparisons are shown live only and are not saved (Google’s terms). They stay on screen for an hour or until the dashboard restarts; Refresh profile audit fetches them again.',
+    ...copy.sources.flatMap(s => s.warnings),
+  ];
   return copy;
 }

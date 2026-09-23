@@ -1,4 +1,6 @@
-export const DISCOVERY_SOURCES = ['import', 'sitemap', 'crawl', 'google', 'searchapi', 'google_browser', 'gsc', 'backlinks'] as const;
+export const DISCOVERY_SOURCES = ['import', 'sitemap', 'crawl', 'google', 'serper', 'searchapi', 'google_browser', 'gsc', 'backlinks'] as const;
+/** Where Google result pages come from. Serper and SearchApi are paid APIs; the browser is free. */
+export type GoogleProviderName = 'serper' | 'searchapi' | 'browser';
 export type DiscoverySource = (typeof DISCOVERY_SOURCES)[number];
 
 export const CLASSIFICATIONS = [
@@ -130,7 +132,7 @@ export interface ScanOptions {
   urls: string[];
   inputFiles: string[];
   discovery: DiscoverySource[];
-  googleProvider: 'auto' | 'searchapi' | 'browser';
+  googleProvider: 'auto' | GoogleProviderName;
   googleCountry: string;
   googleLanguage: string;
   googleMaxPages: number;
@@ -198,8 +200,8 @@ export interface GoogleQueryState {
 
 export interface GoogleDiscoveryState {
   site: string;
-  provider: 'searchapi' | 'browser';
-  providersUsed?: Array<'searchapi' | 'browser'>;
+  provider: GoogleProviderName;
+  providersUsed?: GoogleProviderName[];
   country: string;
   language: string;
   pagesFetched: number;

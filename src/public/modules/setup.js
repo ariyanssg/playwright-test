@@ -6,12 +6,12 @@ const presets = globalThis.SIGNAL404_HOSTED ? { google: ['google'], all: ['impor
 // table and a fix the operator can actually carry out.
 const profileSources = {
   public: {
-    note: 'Reads the public Google Maps listing. Covers name, address, phone, website, hours and business status. Menu, reservation and ordering links are not published by this API.',
-    ready: (providers) => providers?.googleMaps,
-    readyTitle: 'Google Places key detected',
-    readyBody: 'Each restaurant costs one Places lookup, billed by Google.',
-    blockedTitle: 'GOOGLE_MAPS_API_KEY is missing',
-    blockedBody: 'Public listings come from the Places API (New), which uses an API key. GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET do not cover it — they authorize Search Console and the connected Business Profile mode. Add GOOGLE_MAPS_API_KEY to your .env file and restart the dashboard.',
+    note: 'Reads the public Google Maps listing: name, address, phone, website, weekly hours and the booking link. Menu and ordering links are not published in this data.',
+    ready: (providers) => providers?.serper || providers?.googleMaps,
+    readyTitle: (providers) => providers?.serper ? 'Google Maps listing via Serper' : 'Google Places key detected',
+    readyBody: (providers) => providers?.serper ? `About 3 Serper credits per restaurant${providers?.googleMaps ? ', with Google Places as the fallback' : ''}.` : 'Each restaurant costs one Places lookup, billed by Google. Add SERPER_API_KEY for a much cheaper source.',
+    blockedTitle: 'No Google listing source configured',
+    blockedBody: 'Add SERPER_API_KEY (cheapest) or GOOGLE_MAPS_API_KEY (Places API New) to your .env file and restart the dashboard. GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET do not cover public listings; they authorize Search Console and the managed Business Profile mode.',
   },
   managed: {
     note: 'Reads the Business Profile you administer, including menu, reservation and ordering links that the public API never exposes.',
@@ -64,10 +64,10 @@ export function initSetup(onCreated) {
       ? 'Google’s listing will be matched against this address before any value is compared.'
       : 'The street address and postcode are what confirm the branch. Without one, Google’s listing often cannot be verified and every comparison stays unresolved.';
   };
-  $('#check-profile').addEventListener('change', () => {
-    if ($('#check-profile').checked) $$('[name="discovery"]').forEach(input => input.checked = input.value === 'import');
-    profileMode(); update();
-  });
+  // The profile comparison is an addition to the 404 audit, never a replacement: it must not
+  // untick the URL sources (it used to reset them to imports only, which silently turned a
+  // Google 404 audit into a one-page check of the homepage).
+  $('#check-profile').addEventListener('change', () => { profileMode(); update(); });
   $('#profile-mode').addEventListener('change', () => { profileMode(); update(); });
   $('#profile-address').addEventListener('input', profileMode);
   $('#check-hours').addEventListener('change', update);
@@ -114,7 +114,10 @@ export function initSetup(onCreated) {
     $('#google-settings').classList.toggle('hidden', !selected.includes('google'));
     $$('#google-settings input, #google-settings select').forEach((input) => { input.disabled = !selected.includes('google'); });
     $('#google-scope-note').textContent = googleOnly ? 'Only URLs observed in Google results will enter this audit. Website roots are search targets.' : 'Custom audit: Google results are combined with your other selected sources, each labeled separately.';
-    $('#launch-detail').textContent = sites + urls + files.length ? `${number(sites + urls + files.length)} inputs · ${selected.length} sources selected` : 'Add a website, exact URL, or file to begin';
+    const homepageOnly = sites && selected.length && selected.every((source) => source === 'import');
+    $('#launch-detail').textContent = homepageOnly ? 'Only the website addresses themselves will be checked. Add Google results, Sitemaps or Site crawl to find broken pages.'
+      : sites + urls + files.length ? `${number(sites + urls + files.length)} inputs · ${selected.length} sources selected` : 'Add a website, exact URL, or file to begin';
+    $('#launch-detail').classList.toggle('launch-warning', Boolean(homepageOnly));
     $('.ready-chip').innerHTML = sites + urls + files.length ? '<span></span>Ready to start' : '<span></span>Add a target';
     $('.ready-chip').classList.toggle('ready', Boolean(sites + urls + files.length));
     $$('.preset-bar button').forEach((element) => element.setAttribute('aria-pressed', String(presets[element.dataset.preset].join() === selected.join())));

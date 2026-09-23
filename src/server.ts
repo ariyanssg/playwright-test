@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { appDataDir } from './config.js';
 import { ScanService } from './service.js';
 import { checkPlacesKey } from './profile/providers.js';
+import { autoProvider } from './discovery/google-search.js';
 import type { ScanOptions, ScanProgressEvent } from './types.js';
 
 export interface ServerHandle {
@@ -51,9 +52,10 @@ async function routeRequest(service: ScanService, port: number, request: Incomin
   }
   if (method === 'GET' && url.pathname === '/api/providers/status') {
     return json(response, 200, {
+      serper: Boolean(process.env.SERPER_API_KEY),
       searchApi: Boolean(process.env.SEARCHAPI_API_KEY),
       googleBrowser: true,
-      googleDefaultProvider: process.env.SEARCHAPI_API_KEY ? 'searchapi' : 'browser',
+      googleDefaultProvider: autoProvider(),
       dataForSeo: Boolean(process.env.DATAFORSEO_LOGIN && process.env.DATAFORSEO_PASSWORD),
       googleMaps: Boolean(process.env.GOOGLE_MAPS_API_KEY),
       profileAudit: true,
@@ -85,33 +87,38 @@ async function routeRequest(service: ScanService, port: number, request: Incomin
   if (method === 'GET' && url.pathname === '/api/auth/google/status') {
     return json(response, 200, { configured: service.google.configured(), authenticated: await service.google.authenticated() });
   }
+  // Search Console and Business Profile share ONE redirect URI, so a single entry in the Google
+  // Cloud OAuth client covers both. The pending `state` says which connection a callback is for.
+  // The old GBP-only path stays routable for clients that already registered it.
+  const redirectUri = `http://127.0.0.1:${port}/api/auth/google/callback`;
+  if (method === 'GET' && url.pathname === '/api/auth/google/redirect-uri') {
+    return json(response, 200, { redirectUri, origin: `http://127.0.0.1:${port}` });
+  }
   if (method === 'GET' && url.pathname === '/api/auth/google/start') {
-    const redirectUri = `http://127.0.0.1:${port}/api/auth/google/callback`;
     const auth = service.google.beginAuth(redirectUri);
     response.writeHead(302, { location: auth.url }).end();
     return;
   }
-  if (method === 'GET' && url.pathname === '/api/auth/google/callback') {
+  if (method === 'GET' && url.pathname === '/api/auth/gbp/start') {
+    const auth = service.gbp.beginAuth(redirectUri);
+    response.writeHead(302, { location: auth.url }).end(); return;
+  }
+  if (method === 'GET' && (url.pathname === '/api/auth/google/callback' || url.pathname === '/api/auth/gbp/callback')) {
+    const state = url.searchParams.get('state');
     const code = url.searchParams.get('code');
+    const callbackUri = `http://127.0.0.1:${port}${url.pathname}`;
     if (!code) throw new HttpError(400, url.searchParams.get('error') || 'Google did not return an authorization code');
-    if (!service.google.consumeAuthState(url.searchParams.get('state'))) throw new HttpError(400, 'Invalid Google OAuth state');
-    const redirectUri = `http://127.0.0.1:${port}/api/auth/google/callback`;
-    await service.google.exchangeCode(code, redirectUri);
-    response.writeHead(302, { location: '/?google=connected' }).end();
+    if (service.gbp.consumeAuthState(state)) {
+      await service.gbp.exchangeCode(code, callbackUri);
+      response.writeHead(302, { location: '/?gbp=connected#connections' }).end(); return;
+    }
+    if (!service.google.consumeAuthState(state)) throw new HttpError(400, 'Invalid Google OAuth state. Start the connection again from the dashboard.');
+    await service.google.exchangeCode(code, callbackUri);
+    response.writeHead(302, { location: '/?google=connected#connections' }).end();
     return;
   }
   if (method === 'GET' && url.pathname === '/api/google/properties') {
     return json(response, 200, { properties: await service.google.listProperties() });
-  }
-  if (method === 'GET' && url.pathname === '/api/auth/gbp/start') {
-    const auth = service.gbp.beginAuth(`http://127.0.0.1:${port}/api/auth/gbp/callback`);
-    response.writeHead(302, { location: auth.url }).end(); return;
-  }
-  if (method === 'GET' && url.pathname === '/api/auth/gbp/callback') {
-    if (!service.gbp.consumeAuthState(url.searchParams.get('state'))) throw new HttpError(400, 'Invalid GBP OAuth state');
-    const code = url.searchParams.get('code'); if (!code) throw new HttpError(400, 'GBP authorization did not return a code');
-    await service.gbp.exchangeCode(code, `http://127.0.0.1:${port}/api/auth/gbp/callback`);
-    response.writeHead(302, { location: '/#connections' }).end(); return;
   }
   if (method === 'GET' && url.pathname === '/api/gbp/locations') return json(response, 200, { locations: await service.gbp.locations() });
 
@@ -195,7 +202,8 @@ async function serveStatic(pathname: string, response: ServerResponse): Promise<
   const info = await stat(filePath).catch(() => null);
   if (!info?.isFile()) return json(response, 404, { error: 'Not found' });
   // Fonts never change between releases; everything else revalidates so an upgrade shows at once.
-  const cache = fileName.startsWith('fonts/') ? 'public, max-age=31536000, immutable' : 'no-cache';
+  // The page itself is never stored, so it can't pair a stale document with newer scripts.
+  const cache = fileName.startsWith('fonts/') ? 'public, max-age=31536000, immutable' : fileName === 'index.html' ? 'no-store' : 'no-cache';
   response.writeHead(200, { 'content-type': contentType(fileName), 'content-length': info.size, 'cache-control': cache });
   createReadStream(filePath).pipe(response);
 }

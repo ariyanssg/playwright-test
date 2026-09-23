@@ -485,6 +485,7 @@ summary > svg:last-child { transition: transform .2s var(--ease); color: var(--m
 .brief-facts dt { padding-right: 6px; }
 .brief-facts dd { padding-left: 6px; }
 .launch-detail { margin: 14px 0 12px; color: var(--muted); font-size: 13px; }
+.launch-detail.launch-warning { padding: 8px 10px; border-radius: 6px; background: var(--heat-soft); color: var(--heat); font-weight: 550; }
 .button.launch { width: 100%; min-height: 50px; font-size: 15.5px; }
 .button.launch svg { transition: transform .18s var(--ease); }
 .button.launch:hover svg { transform: translateX(3px); }
@@ -680,7 +681,7 @@ tbody tr.row-warn td:first-child { box-shadow: inset 3px 0 0 var(--heat); }
 .profile-results > p { color: var(--muted); }
 .profile-card { background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; }
 .profile-head { display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; padding: 18px 20px; border-bottom: 1px solid var(--line); }
-.profile-head h3 { font-size: 26px; font-stretch: 62%; font-weight: 800; text-transform: uppercase; line-height: 1; overflow-wrap: anywhere; }
+.profile-head h3 { font-size: 26px; font-stretch: 62%; font-weight: 800; line-height: 1; overflow-wrap: anywhere; }
 .profile-head p { color: var(--muted); font-size: 13px; margin-top: 6px; }
 .profile-outcome { align-self: flex-start; }
 .profile-outcome.pass { color: var(--pass); }
@@ -793,6 +794,9 @@ tbody tr.row-warn td:first-child { box-shadow: inset 3px 0 0 var(--heat); }
 .connection-help > p, .connection-help dl { padding: 0 20px 14px; color: var(--ink-2); font-size: 14px; }
 .connection-help dl { display: grid; grid-template-columns: minmax(0, 240px) minmax(0, 1fr); gap: 10px 20px; }
 .connection-help dt { font-weight: 600; }
+.redirect-uri { margin: 0 20px 16px; padding: 14px; border: 1px solid var(--line); border-left: 4px solid var(--steel); border-radius: var(--radius); background: var(--paper-2); display: grid; gap: 10px; font-size: 14px; }
+.copy-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.copy-row code { flex: 1 1 260px; padding: 8px 10px; font-size: 12.5px; background: var(--paper); }
 .connection-help dd { color: var(--muted); }
 
 /* ---------- Toast and command palette ---------- */

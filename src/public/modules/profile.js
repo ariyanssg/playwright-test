@@ -60,7 +60,7 @@ function card(report) {
   const links = report.links.map((link) => `<li><span class="service">${e(SERVICE[link.service] || link.service)}</span><span><a href="${e(safeUrl(link.url))}" target="_blank" rel="noreferrer">${e(link.url)}</a></span><p><span class="link-health ${healthTone(link.health)}">${e(HEALTH[link.health] || link.health)}<span class="sr-only"> (${e(link.health)})</span></span> · ${e(SOURCE[link.source] || link.source)} · HTTP ${link.httpStatus ?? 'unknown'}${link.finalUrl && link.finalUrl !== link.url ? ` · ends at ${e(link.finalUrl)}` : ''}<br>${e(link.reason)}</p></li>`).join('');
   return `<article class="profile-card">
     <header class="profile-head">
-      <div><h3>${e(report.target.name || hostname(report.target.url))}</h3><p>${e(MODE[report.mode] || report.mode)} · checked ${e(new Date(report.completedAt).toLocaleString())} · ${e(RETENTION[report.retention] || report.retention)}</p></div>
+      <div><h3>${e(report.target.name || report.sources.find((source) => source.source === 'website')?.facts.find((item) => item.field === 'name')?.value || hostname(report.target.url))}</h3><p>${e(MODE[report.mode] || report.mode)} · checked ${e(new Date(report.completedAt).toLocaleString())} · ${e(RETENTION[report.retention] || report.retention)}</p></div>
       <span class="status-pill profile-outcome ${e(s.outcome)}">${e(OUTCOME[s.outcome] || s.outcome)}</span>
     </header>
     <dl class="profile-tally">

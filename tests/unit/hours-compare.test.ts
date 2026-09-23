@@ -109,3 +109,16 @@ test('the worked example lands on minor differences', () => {
   assert.equal(result.maxDeltaMinutes, 15);
   assert.equal(result.status, 'minor_differences');
 });
+
+test('Google Maps hours read via Serper become Places periods that compare like any other', async () => {
+  const { serperOpeningHours } = await import('../../src/hours/places.js');
+  const { weeklyHoursFromPlaceHours, formatDayIntervals } = await import('../../src/hours/schedule.js');
+  const hours = serperOpeningHours({ Monday: '6–10:30 PM', Friday: '5:45–11 PM', Saturday: 'Closed' });
+  assert.ok(hours);
+  const weekly = weeklyHoursFromPlaceHours(hours);
+  assert.equal(formatDayIntervals(weekly, 1), '6:00 PM - 10:30 PM');
+  assert.equal(formatDayIntervals(weekly, 5), '5:45 PM - 11:00 PM');
+  assert.equal(formatDayIntervals(weekly, 6), 'Closed');
+  // Days the listing never showed stay unstated rather than becoming "closed".
+  assert.equal(formatDayIntervals(weekly, 3), '');
+});

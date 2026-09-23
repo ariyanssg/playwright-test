@@ -6,7 +6,7 @@ export const lines = (value) => value.split(/\r?\n/).map((line) => line.trim()).
 export const isRunning = (status) => ['queued', 'discovering', 'waiting_for_google', 'scanning', 'comparing_hours', 'comparing_profile', 'reporting'].includes(status);
 export const statusLabel = (status) => ({ queued: 'Queued', discovering: 'Discovering', waiting_for_google: 'Waiting for Google', scanning: 'Verifying', comparing_profile: 'Comparing profile', comparing_hours: 'Comparing hours', reporting: 'Reporting', completed: 'Completed', completed_partial: 'Partial coverage', cancelled: 'Cancelled', failed: 'Failed' })[status] || status;
 export const classificationLabel = (value) => ({ hard_404: 'Hard 404', gone_410: 'Gone 410', soft_404_suspected: 'Soft 404 suspected', redirected: 'Redirected', ok: 'Healthy', server_error: 'Server error', blocked: 'Blocked', timeout: 'Timed out', network_error: 'Network error' })[value] || value;
-export const sourceLabel = (value) => ({ import: 'Import', sitemap: 'Sitemap', crawl: 'Crawl', google: 'Google', searchapi: 'Google · API', google_browser: 'Google · browser', gsc: 'Search Console', backlinks: 'Backlink' })[value] || value;
+export const sourceLabel = (value) => ({ import: 'Import', sitemap: 'Sitemap', crawl: 'Crawl', google: 'Google', serper: 'Google · Serper', searchapi: 'Google · SearchApi', google_browser: 'Google · browser', gsc: 'Search Console', backlinks: 'Backlink' })[value] || value;
 export const isFinding = (classification) => ['hard_404', 'gone_410', 'soft_404_suspected'].includes(classification);
 export function safeUrl(value) {
   try { const url = new URL(value); return ['http:', 'https:'].includes(url.protocol) ? url.href : '#'; } catch { return '#'; }

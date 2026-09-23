@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readFile, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createServer } from 'node:http';
 import test from 'node:test';
 import ExcelJS from 'exceljs';
 import { parse } from 'csv-parse/sync';
@@ -139,5 +140,45 @@ test('enforces per-host concurrency and delay while global workers remain parall
   } finally {
     service.close();
     await fixture.close();
+  }
+});
+
+test('a client-rendered site is read after it renders, not while it is still a navigation shell', async () => {
+  // Mirrors a real ordering-platform restaurant site: every URL first serves the same large
+  // navigation/footer shell plus inline script source, and the page content arrives ~1 s later.
+  const nav = Array.from({ length: 12 }, (_, index) => `<a href="/p${index}">Section ${index} of our restaurant</a>`).join(' ');
+  const footer = '<footer>6 Langley Road, Abbots Langley. Open every day for dine-in, takeaway and delivery. Follow us on social media for offers and seasonal specials.</footer>';
+  const inlineScript = `<script>/* ${'var config = { analytics: true, theme: "dark" }; '.repeat(20)} */</script>`;
+  const real: Record<string, string> = { '/': 'Welcome to our tandoori kitchen, cooking since 1998.', '/menu': 'Papadam, chutneys, lamb biryani, chicken tikka masala and garlic naan.', '/awards': 'Regional chef of the year and a Good Food Award winner.' };
+  // Identical HTML for every URL, as a client-side router serves it; content comes from an API.
+  const late = `<script>fetch('/__content' + location.pathname).then((r) => r.json()).then((page) => { document.title = page.title; document.querySelector('#app').textContent = page.text; })</script>`;
+  const server = createServer((request, response) => {
+    const path = new URL(request.url ?? '/', 'http://127.0.0.1').pathname;
+    if (path.startsWith('/__content')) {
+      const route = path.slice('/__content'.length) || '/';
+      const text = real[route] ?? '404 Looks like you are lost. The page you are looking for is not available!';
+      setTimeout(() => { response.writeHead(200, { 'content-type': 'application/json' }); response.end(JSON.stringify({ title: 'Tandoori House', text })); }, 900);
+      return;
+    }
+    response.writeHead(200, { 'content-type': 'text/html' });
+    response.end(`<!doctype html><title></title><nav>${nav}</nav>${inlineScript}<div id="app"></div>${footer}${late}`);
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  if (!address || typeof address === 'string') throw new Error('Late-render fixture did not bind');
+  const origin = `http://127.0.0.1:${address.port}`;
+  const directory = await mkdtemp(join(tmpdir(), 'seo404-late-'));
+  const service = new ScanService(join(directory, 'scan.sqlite'));
+  try {
+    const scan = service.createScan({
+      urls: ['/menu', '/awards', '/christmas-menu-2019'].map((path) => origin + path), discovery: ['import'],
+      outputDir: join(directory, 'runs'), hostDelayMs: 0, timeoutMs: 15_000, failOn: 'none',
+    });
+    await service.start(scan.id);
+    const verdicts = Object.fromEntries(service.results(scan.id, 0, 10).items.map((item) => [new URL(item.normalizedUrl).pathname, item.result!.classification]));
+    assert.deepEqual(verdicts, { '/menu': 'ok', '/awards': 'ok', '/christmas-menu-2019': 'soft_404_suspected' });
+  } finally {
+    service.close();
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   }
 });

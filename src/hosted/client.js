@@ -76,13 +76,13 @@ async function run(scanId) {
             const observedAt = now();
             const additions = page.results.flatMap((item) => {
               let url; try { url = normalize(item.url); if (host(url) !== host(state.site)) return []; } catch { return []; }
-              return [{ inputUrl: url, normalizedUrl: url, site: new URL(url).origin, sources: [{ source: 'searchapi', provider: 'searchapi', query: query.query, resultPage: query.nextPage, position: item.position, title: item.title, snippet: item.snippet, resultKind: item.kind, searchUrl: page.searchUrl, country: state.country, language: state.language, observedAt }] }];
+              return [{ inputUrl: url, normalizedUrl: url, site: new URL(url).origin, sources: [{ source: page.provider || 'searchapi', provider: page.provider || 'searchapi', query: query.query, resultPage: query.nextPage, position: item.position, title: item.title, snippet: item.snippet, resultKind: item.kind, searchUrl: page.searchUrl, country: state.country, language: state.language, observedAt }] }];
             });
             const fingerprint = [...new Set(page.results.map((r) => r.url))].sort().join('\n');
             query.done = !page.hasNext || !page.results.length || query.fingerprints.includes(fingerprint);
             if (page.warnings?.length) { state.status = 'failed'; state.error = page.warnings.join('; '); scan.warnings.push(state.error); }
             else { query.fingerprints.push(fingerprint); query.nextPage++; }
-            state.pagesFetched++; state.updatedAt = now(); state.providersUsed = ['searchapi'];
+            state.pagesFetched++; state.updatedAt = now(); state.providersUsed = [...new Set([...(state.providersUsed || []), page.provider || 'searchapi'])];
             await persist(scan, additions);
             if (state.status === 'failed') break;
           }
@@ -159,7 +159,7 @@ export async function hostedRequest(path, options = {}) {
     if (supplied.checkProfile) throw new Error('Business Profile audits require the local desktop scanner.');
     const opts = { sites: [], urls: [], inputFiles: [], discovery: ['google'], googleProvider: 'searchapi', googleCountry: 'gb', googleLanguage: 'en', googleMaxPages: 50, hoursPageLimit: 5, ...supplied };
     if (opts.discovery.some((s) => !['google', 'searchapi', 'import'].includes(s))) throw new Error('Hosted audits currently support Google results and exact imports. Other discovery providers remain available in the desktop version.');
-    if (opts.googleProvider === 'browser' || opts.inspectGoogle) throw new Error('Local Google browser and Search Console inspection are available in the desktop version. Choose SearchApi for hosted discovery.');
+    if (opts.googleProvider === 'browser' || opts.inspectGoogle) throw new Error('Local Google browser and Search Console inspection are available in the desktop version. Choose an API provider for hosted discovery.');
     if (!Number.isInteger(opts.googleMaxPages) || opts.googleMaxPages < 1 || opts.googleMaxPages > 100) throw new Error('Use a Google page budget between 1 and 100 online.');
     opts.sites = [...new Set(opts.sites.map((s) => new URL(normalize(s)).origin))]; opts.urls = opts.urls.map(normalize);
     const scan = { id, options: opts, status: 'queued', createdAt: now(), startedAt: null, completedAt: null, total: 0, processed: 0, findings: 0, error: null, cancelRequested: false, warnings: [], outputDir: 'Browser storage', baselines: {}, hours: [], hoursWork: {}, googleDiscovery: opts.discovery.some((s) => ['google', 'searchapi'].includes(s)) ? opts.sites.map((site) => ({ site, provider: 'searchapi', country: opts.googleCountry, language: opts.googleLanguage, pagesFetched: 0, status: 'running', updatedAt: now(), queries: queryList(site).map((query) => ({ query, nextPage: 1, done: false, fingerprints: [] })) })) : [] };

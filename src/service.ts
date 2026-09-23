@@ -12,7 +12,8 @@ import { GoogleSearchConsole } from './google.js';
 import { importRowsFromFile, type ImportedRow } from './imports.js';
 import { auditSiteHours } from './hours/audit.js';
 import { HoursInspector } from './hours/inspector.js';
-import type { PlaceHints } from './hours/match.js';
+import type { PlaceHints, PlaceLookup } from './hours/match.js';
+import { fetchPlaceDetails, searchPlaces, searchSerperPlaces } from './hours/places.js';
 import { selectHoursPages } from './hours/pages.js';
 import { holdBrowser } from './browser.js';
 import { RobotsCache } from './robots.js';
@@ -249,7 +250,7 @@ export class ScanService {
       }
     }
     const seen = new Set<string>();
-    const googleOnly = options.discovery.every((source) => ['google', 'searchapi', 'google_browser'].includes(source));
+    const googleOnly = options.discovery.every((source) => ['google', 'serper', 'searchapi', 'google_browser'].includes(source));
     this.db.transaction(() => {
       for (const row of imported) {
         const normalized = tryNormalizeUrl(row.url);
@@ -295,7 +296,7 @@ export class ScanService {
           this.warnAdapter(scanId, 'sitemap', site, error);
         }
       }
-      if (options.discovery.some((source) => ['google', 'searchapi', 'google_browser'].includes(source))) {
+      if (options.discovery.some((source) => ['google', 'serper', 'searchapi', 'google_browser'].includes(source))) {
         await discoverGoogle(site, options, {
           db: this.db, scanId, signal: this.discoveryControllers.get(scanId)!.signal,
           progress: (message) => this.emit(scanId, message),
@@ -348,11 +349,26 @@ export class ScanService {
     }
     if (!sites.size) return;
     // Fail fast rather than driving a browser over every site only to be rejected by Places.
-    if (!process.env.GOOGLE_MAPS_API_KEY) {
-      this.db.appendWarning(scanId, 'hours comparison: GOOGLE_MAPS_API_KEY is required for opening-hours comparison');
+    if (!process.env.GOOGLE_MAPS_API_KEY && !process.env.SERPER_API_KEY) {
+      this.db.appendWarning(scanId, 'hours comparison: set SERPER_API_KEY (cheapest) or GOOGLE_MAPS_API_KEY to read Google opening hours');
       return;
     }
 
+    // Google Maps data via Serper first (cheapest, and unaffected by Cloud key restrictions),
+    // Places API as the fallback. A Serper failure is noted rather than silently swallowed.
+    const lookup: PlaceLookup = {
+      search: async (query) => {
+        if (process.env.SERPER_API_KEY) {
+          try { return await searchSerperPlaces(query); }
+          catch (error) {
+            if (!process.env.GOOGLE_MAPS_API_KEY) throw error;
+            this.db.appendWarning(scanId, `hours: Serper Maps unavailable (${error instanceof Error ? error.message : String(error)}); used Google Places instead`);
+          }
+        }
+        return searchPlaces(query);
+      },
+      details: (placeId) => process.env.GOOGLE_MAPS_API_KEY && !placeId.startsWith('cid:') ? fetchPlaceDetails(placeId) : Promise.resolve(null),
+    };
     const inspector = new HoursInspector({
       perHostConcurrency: options.perHostConcurrency,
       hostDelayMs: options.hostDelayMs,
@@ -376,7 +392,7 @@ export class ScanService {
             hints: collectPlaceHints(candidates, key),
             toleranceMinutes: options.hoursToleranceMinutes,
             requireVerifiedPlace: options.hoursRequireVerifiedPlace,
-          }, inspector);
+          }, inspector, lookup);
           this.db.upsertHours(scanId, record);
           if (record.matchConfidence === 'unverified') {
             this.db.appendWarning(scanId, `hours ${key}: compared against an unverified Google listing`);
@@ -396,12 +412,21 @@ export class ScanService {
   }
 
   private async compareProfiles(scanId: string, options: ScanOptions, signal: AbortSignal): Promise<void> {
-    const targets: ProfileTarget[] = [...options.profileTargets];
-    const urls = [...options.sites, ...options.urls];
-    for (const url of urls) if (!targets.some(t => t.url === url)) targets.push({ url });
+    const raw: ProfileTarget[] = [...options.profileTargets];
+    for (const url of [...options.sites, ...options.urls]) raw.push({ url });
     // Read original import rows; candidate URL deduplication must not collapse branches.
     for (const path of options.inputFiles) for (const row of await importRowsFromFile(resolve(path))) {
-      targets.push({ url: row.url, name: row.name, address: row.address, placeId: row.placeId });
+      raw.push({ url: row.url, name: row.name, address: row.address, placeId: row.placeId });
+    }
+    // Discovery accepts "www.example.com" without a scheme, so the profile step must too: the raw
+    // text used to reach `new URL()` here and failed the whole audit with "Invalid URL".
+    const targets: ProfileTarget[] = [];
+    for (const target of raw) {
+      const url = tryNormalizeUrl(target.url);
+      if (!url) { this.db.appendWarning(scanId, `profile ${target.url}: not a website address, skipped`); continue; }
+      const existing = targets.find(t => t.url === url);
+      if (existing) { existing.name ??= target.name; existing.address ??= target.address; existing.placeId ??= target.placeId; existing.gbpLocation ??= target.gbpLocation; }
+      else targets.push({ ...target, url });
     }
     const unique = new Map(targets.map(target => [targetKey(target), target]));
     const entry = { expires: Date.now() + 3600000, reports: new Map<string, ProfileReport>() };
@@ -422,7 +447,14 @@ export class ScanService {
       for (let index = next++; index < pending.length; index = next++) {
         if (signal.aborted) return;
         const [key, target] = pending[index]!;
-        const report = await auditProfile(scanId, target, { mode: options.profileMode, pageLimit: options.profilePageLimit, timeoutMs: options.timeoutMs, hostDelayMs: options.hostDelayMs, country: options.googleCountry.toUpperCase(), tolerance: options.profileHoursTolerance, signal }, candidates, { gbp: this.gbp, imported: options.profileEvidence, ...this.profileDependencies });
+        // One restaurant's failure is recorded against that restaurant; it never fails the audit.
+        let report: ProfileReport;
+        try {
+          report = await auditProfile(scanId, target, { mode: options.profileMode, pageLimit: options.profilePageLimit, timeoutMs: options.timeoutMs, hostDelayMs: options.hostDelayMs, country: options.googleCountry.toUpperCase(), tolerance: options.profileHoursTolerance, signal }, candidates, { gbp: this.gbp, imported: options.profileEvidence, ...this.profileDependencies });
+        } catch (error) {
+          this.warnAdapter(scanId, 'profile', target.url, error);
+          continue;
+        }
         entry.reports.set(key, report); entry.expires = Date.now() + 3600000;
         this.db.upsertProfile(scanId, report);
         this.emit(scanId, `Profile ${new URL(target.url).hostname}: ${report.summary.matches} matches, ${report.summary.mismatches} mismatches, ${report.summary.missing} missing, ${report.summary.unknown} unresolved`);

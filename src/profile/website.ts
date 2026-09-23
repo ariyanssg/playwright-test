@@ -3,7 +3,7 @@ import robotsParser from 'robots-parser';
 import { startPublicProxy } from '../hosted/network.js';
 import { AUDITOR_USER_AGENT } from '../robots.js';
 import { harvestHours, type HoursHarvest } from '../hours/harvest.js';
-import { parseJsonLdHours } from '../hours/parse-jsonld.js';
+import { parseJsonLdHours, stripJsonNoise } from '../hours/parse-jsonld.js';
 import { parseMicrodataHours } from '../hours/parse-microdata.js';
 import { parseTextHours } from '../hours/parse-text.js';
 import { parseClockTime } from '../hours/schedule.js';
@@ -268,14 +268,18 @@ export function extract(out: WebsiteSnapshot, harvest: HoursHarvest, content: Pa
   const nodes: Record<string, any>[] = [];
   for (const script of harvest.jsonLd) {
     try {
-      const queue = [JSON.parse(script)];
+      const cleaned = stripJsonNoise(script);
+      // Sites mislabel tracking snippets (e.g. the Facebook pixel) as ld+json. Only text that is
+      // meant to be JSON is worth a warning; anything else is simply not structured data.
+      if (!/^[[{]/.test(cleaned)) continue;
+      const queue = [JSON.parse(cleaned)];
       for (let count = 0; queue.length && count < 2000; count++) {
         const value = queue.shift(); if (!value || typeof value !== 'object') continue;
         if (Array.isArray(value)) { queue.push(...value); continue; }
         if (/restaurant|foodestablishment|localbusiness|cafeorcoffeeshop/i.test([value['@type']].flat().join(' '))) nodes.push(value);
         queue.push(...Object.values(value).filter(v => v && typeof v === 'object'));
       }
-    } catch { out.warnings.push(`Invalid JSON-LD on ${url}`); }
+    } catch { if (!out.warnings.some(w => w.startsWith('Invalid JSON-LD'))) out.warnings.push(`Invalid JSON-LD on ${url} (structured data on this site could not be parsed)`); }
   }
   const selected = nodes.filter(n => !target.name || !n.name || textKey(n.name) === textKey(target.name));
   for (const node of selected) {

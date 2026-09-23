@@ -8,6 +8,7 @@ import { classifyPage, makeBaseline } from '../classifier.js';
 import { blockUnreadResources, renderPage } from '../scanner.js';
 import { AUDITOR_USER_AGENT } from '../robots.js';
 import { fetchSearchApiPage } from '../discovery/searchapi.js';
+import { fetchSerperPage } from '../discovery/serper.js';
 import { googleQueries } from '../discovery/google-results.js';
 import { harvestHours } from '../hours/harvest.js';
 import { extractPageHours, chooseWebsiteHours } from '../hours/website.js';
@@ -18,14 +19,17 @@ import type { Candidate, ScanResult } from '../types.js';
 
 type Env = (key: string) => string | undefined;
 export async function hostedTask(body: any, env: Env) {
-  if (body.action === 'providers') return { hosted: true, searchApi: Boolean(env('SEARCHAPI_API_KEY')), googleBrowser: false, googleDefaultProvider: 'searchapi', googleMaps: Boolean(env('GOOGLE_MAPS_API_KEY')), dataForSeo: false };
+  if (body.action === 'providers') return { hosted: true, serper: Boolean(env('SERPER_API_KEY')), searchApi: Boolean(env('SERPER_API_KEY') || env('SEARCHAPI_API_KEY')), googleBrowser: false, googleDefaultProvider: env('SERPER_API_KEY') ? 'serper' : 'searchapi', googleMaps: Boolean(env('GOOGLE_MAPS_API_KEY')), dataForSeo: false };
   if (body.action === 'google') {
     const site = publicUrl(body.site); await publicAddress(site.hostname);
     const queries = googleQueries(site.origin);
     if (!queries.includes(body.query)) throw new Error('Choose a supported site discovery query.');
     if (!Number.isInteger(body.page) || body.page < 1 || body.page > 100) throw new Error('Invalid search page.');
     if (!/^[a-z]{2}$/.test(body.country) || !/^[a-z-]{2,12}$/i.test(body.language)) throw new Error('Invalid search market.');
-    return fetchSearchApiPage({ query: body.query, page: body.page, country: body.country, language: body.language, signal: AbortSignal.timeout(45_000) }, env('SEARCHAPI_API_KEY'));
+    const request = { query: body.query, page: body.page, country: body.country, language: body.language, signal: AbortSignal.timeout(45_000) };
+    // Serper is the cheaper API; SearchApi remains the fallback for existing deployments.
+    if (env('SERPER_API_KEY')) return { ...await fetchSerperPage(request, env('SERPER_API_KEY')), provider: 'serper' };
+    return { ...await fetchSearchApiPage(request, env('SEARCHAPI_API_KEY')), provider: 'searchapi' };
   }
   if (body.action === 'hours-compare') {
     publicUrl(body.site);

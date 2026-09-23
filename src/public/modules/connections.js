@@ -1,12 +1,17 @@
 import { request } from './api.js';
-import { $, escapeHtml as e, icon } from './ui.js';
+import { $, escapeHtml as e, icon, notify } from './ui.js';
 export async function loadConnections(applyProviderStatus) {
-  const [googleResult, providerResult] = await Promise.allSettled([request('/api/auth/google/status'), request('/api/providers/status')]);
+  const [googleResult, providerResult, redirectResult] = await Promise.allSettled([request('/api/auth/google/status'), request('/api/providers/status'), globalThis.SIGNAL404_HOSTED ? Promise.reject(new Error('hosted')) : request('/api/auth/google/redirect-uri')]);
+  if (redirectResult.status === 'fulfilled') {
+    $('#redirect-uri').hidden = false;
+    $('#redirect-uri-value').textContent = redirectResult.value.redirectUri;
+    $('#redirect-origin').textContent = redirectResult.value.origin;
+  }
   const google = googleResult.status === 'fulfilled' ? googleResult.value : null;
   const providers = providerResult.status === 'fulfilled' ? providerResult.value : null;
   const definitions = [
     { name: 'Website discovery', description: 'Imports, sitemaps, and rendered links for website audits.', symbol: 'globe', available: true, badge: 'Built in', note: 'Available through Website only or All sources' },
-    { name: 'Google search results', description: 'Actual organic result URLs from SearchApi or a local Google browser.', symbol: 'search', available: providers?.googleBrowser || providers?.searchApi, source: 'google', badge: providers?.searchApi ? 'API ready' : 'Browser ready', note: 'Five queries · configurable page budget · UK English by default' },
+    { name: 'Google search results', description: 'Organic result URLs from Serper, SearchApi, or a free local Google browser.', symbol: 'search', available: providers?.googleBrowser || providers?.serper || providers?.searchApi, source: 'google', badge: providers?.serper ? 'Serper ready' : providers?.searchApi ? 'SearchApi ready' : 'Browser ready', note: providers?.serper ? 'Auto uses Serper (about $0.30–$1 per 1,000 pages)' : providers?.searchApi ? 'Auto uses SearchApi. Set SERPER_API_KEY for a cheaper API' : 'Free local browser. Set SERPER_API_KEY for an API without CAPTCHAs' },
     { name: 'Google Search Console', description: 'Add page, sitemap and indexed-version evidence from your verified properties.', symbol: 'console', available: google?.authenticated, source: 'gsc', connect: google?.configured && !google.authenticated, note: 'Connect your Google account after adding credentials' },
     { name: 'DataForSEO backlinks', description: 'Discover linked pages and retain the evidence from referring websites.', symbol: 'link', available: providers?.dataForSeo, source: 'backlinks', note: 'Optional · requests are billed by the provider' },
     { name: 'Google Places', description: 'Compare opening hours and the public business listing against the restaurant’s own website.', symbol: 'clock', available: providers?.googleMaps, badge: providers?.googleMaps ? 'Key detected' : 'Key required', note: providers?.googleMaps ? 'GOOGLE_MAPS_API_KEY detected · requests are billed by Google' : 'Set GOOGLE_MAPS_API_KEY · this is an API key, not GOOGLE_CLIENT_ID/SECRET', check: providers?.googleMaps },
@@ -24,11 +29,16 @@ export async function loadConnections(applyProviderStatus) {
     tag.classList.toggle('optional', !provider.available);
   }
   $('#google-status').innerHTML = `<span class="connection-light ${google?.authenticated ? '' : 'muted'}"></span><span><b>Search Console</b><small>${google?.authenticated ? 'Connected' : google ? 'Not connected · optional' : 'Status unavailable'}</small></span>${icon('arrow')}`;
-  $('#check-hours').disabled = !providers?.googleMaps;
-  $('#google-provider-note').textContent = providers?.searchApi ? 'Auto will use SearchApi (provider credits), with a visible browser fallback if it fails.' : 'Auto will open a local Google browser. No API key is needed. Resolve any Google prompt there, then choose Continue in the audit.';
-  if (globalThis.SIGNAL404_HOSTED) $('#google-provider-note').textContent = providers?.searchApi ? 'Hosted Google discovery uses SearchApi. Search credits and Netlify usage limits apply; keep the tab open to continue scanning.' : 'Add SEARCHAPI_API_KEY to the Netlify environment to enable Google discovery. Exact URL imports do not need a search key.';
-  if (!providers?.googleMaps) $('#check-hours').checked = false;
-  $('#check-hours-note').textContent = providers?.googleMaps ? 'Google Places is connected · billed per request' : 'Connect Google Places to enable · billed per request';
+  const hoursSource = providers?.serper || providers?.googleMaps;
+  $('#check-hours').disabled = !hoursSource;
+  $('#google-provider-note').textContent = providers?.serper ? `Auto will use Serper (one credit per results page)${providers?.searchApi ? ', then SearchApi,' : ''} with a visible browser fallback if it fails.` : providers?.searchApi ? 'Auto will use SearchApi (provider credits), with a visible browser fallback if it fails. Serper is a cheaper API: set SERPER_API_KEY.' : 'Auto will open a local Google browser. No API key is needed. Resolve any Google prompt there, then choose Continue in the audit.';
+  // Optional chaining: a page cached from an older release may not have every provider option.
+  const option = (value) => $(`#google-provider option[value="${value}"]`);
+  if (option('serper')) option('serper').disabled = !providers?.serper && !globalThis.SIGNAL404_HOSTED;
+  if (option('searchapi')) option('searchapi').disabled = !providers?.searchApi && !globalThis.SIGNAL404_HOSTED;
+  if (globalThis.SIGNAL404_HOSTED) $('#google-provider-note').textContent = providers?.searchApi ? `Hosted Google discovery uses ${providers?.serper ? 'Serper' : 'SearchApi'}. Search credits and Netlify usage limits apply; keep the tab open to continue scanning.` : 'Add SERPER_API_KEY (cheapest) or SEARCHAPI_API_KEY to the Netlify environment to enable Google discovery. Exact URL imports do not need a search key.';
+  if (!hoursSource) $('#check-hours').checked = false;
+  $('#check-hours-note').textContent = providers?.serper ? 'Google Maps hours via Serper · about 3 credits per restaurant' : providers?.googleMaps ? 'Google Places is connected · billed per request' : 'Set SERPER_API_KEY or GOOGLE_MAPS_API_KEY to enable';
   $('#inspect-google').disabled = !google?.authenticated;
   if (!google?.authenticated) $('#inspect-google').checked = false;
   $('#inspect-google').closest('label').querySelector('small').textContent = google?.authenticated ? 'Uses URL Inspection quota only after live verification' : 'Connect Search Console to enable URL Inspection';
@@ -57,3 +67,16 @@ document.addEventListener('click', async (event) => {
     result.hidden = false; result.textContent = error.message; result.classList.add('bad');
   } finally { button.disabled = false; button.textContent = original; }
 });
+
+document.addEventListener('click', async (event) => {
+  if (!event.target.closest('#copy-redirect-uri')) return;
+  try { await navigator.clipboard.writeText($('#redirect-uri-value').textContent); notify('Redirect URI copied.'); }
+  catch { notify('Copy failed. Select the address and copy it manually.', true); }
+});
+
+// After Google sends the browser back, say what happened and open Connections.
+const connected = new URLSearchParams(location.search);
+if (connected.has('gbp') || connected.has('google')) {
+  queueMicrotask(() => notify(connected.has('gbp') ? 'Business Profile connected. Load your locations in a new audit.' : 'Search Console connected.'));
+  history.replaceState(null, '', `${location.pathname}${location.hash || '#connections'}`);
+}

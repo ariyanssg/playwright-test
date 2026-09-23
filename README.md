@@ -117,11 +117,19 @@ npm run cli -- scan --site https://www.seacontainerslondon.com/
 # Browser discovery without a provider key
 npm run cli -- scan --site https://example.com --google-provider browser
 
-# API only, using SEARCHAPI_API_KEY from your environment or local .env
-npm run cli -- scan --site https://example.com --google-provider searchapi --google-country gb --google-language en --google-max-pages 50
+# API only, using SERPER_API_KEY (or SEARCHAPI_API_KEY) from your environment or local .env
+npm run cli -- scan --site https://example.com --google-provider serper --google-country gb --google-language en --google-max-pages 50
 ```
 
-Auto uses SearchApi when `SEARCHAPI_API_KEY` is configured, otherwise a dedicated local Chromium browser. API failure switches Auto to the browser and records the reason. Explicit provider choices never silently switch. The legacy `--discover searchapi` remains API-only; `--discover all` invokes unified Google discovery once. API requests consume provider credits.
+Auto picks the cheapest configured provider: [Serper](https://serper.dev) when `SERPER_API_KEY` is set, then SearchApi when `SEARCHAPI_API_KEY` is set, otherwise a dedicated local Chromium browser. When an API fails, Auto moves to the next option (Serper → SearchApi → browser) and records the reason.
+
+| Provider | Cost per 1,000 result pages | Notes |
+| --- | --- | --- |
+| Local browser | Free | May pause for a CAPTCHA or consent prompt |
+| Serper | about $1.00 on the $50 pack, down to $0.30 on larger packs | 2,500 free queries to start; paid credits expire after six months |
+| SearchApi | $4.00 on the $40 plan, down to $1.00 on the largest plans | 100 free requests |
+
+Every provider is billed per 10-result page, and one audit uses at most `--google-max-pages` pages per website (50 by default). At the default budget a site costs at most about $0.05 with Serper against $0.20 with SearchApi's entry plan. Explicit provider choices never silently switch. The legacy `--discover searchapi` remains API-only; `--discover all` invokes unified Google discovery once. API requests consume provider credits.
 
 The five queries are `site:domain`, `site:domain 404`, `site:domain "not found"`, `site:domain "page does not exist"`, and `site:domain intitle:error`. Pagination stops when results end, repeat, or reach the total page budget. Only organic results and sitelinks on the target hostname or its www equivalent become Google candidates. Search links are resolved to the original destination; PDFs and meaningful query strings are preserved. Sitemaps, website links, and guessed paths never count as Google search evidence.
 
@@ -131,15 +139,32 @@ Each observation retains provider, query, page, position, title, snippet, search
 
 ### Google Search Console
 
-1. Create a Google Cloud OAuth client and enable the Search Console API.
-2. Add these localhost redirect URIs:
-   - `http://127.0.0.1:4173/api/auth/google/callback`
-   - `http://127.0.0.1:4174/oauth2/callback`
+1. Create a Google Cloud OAuth client (type **Web application**) and enable the Search Console API.
+2. Add these localhost redirect URIs under **Authorized redirect URIs**:
+   - `http://127.0.0.1:4173/api/auth/google/callback`, which the dashboard uses for both Search Console and Business Profile. **Connections → How to enable a connection** shows the exact value for the port you run on, with a copy button.
+   - `http://127.0.0.1:4174/oauth2/callback`, for `npm run cli -- auth google`
+   Open the dashboard at `http://127.0.0.1:4173`, not `http://localhost:4173`: Google treats the two as different addresses, and a mismatch is reported as `Error 400: redirect_uri_mismatch`.
 3. Set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`.
 4. Run `npm run cli -- auth google`, or use **Connect Search Console** in the dashboard.
 5. Include `gsc` in discovery. Add `--inspect-google` to inspect actionable findings.
 
 The tool prefers matching domain properties (`sc-domain:example.com`), then the longest matching URL-prefix property. Search Analytics defaults to the last 90 available days. URL Inspection is used only for hard/soft findings and remains subject to Google quotas. Search Console data is evidence about Google's stored/indexed version, while Playwright provides the current live response.
+
+### Business profile comparison (public Google listing)
+
+**Full business profile** in a new audit compares the restaurant's website with its public Google listing: name, phone, website, weekly hours, and the booking link. The listing is read from the cheapest source that works:
+
+1. Google Maps data via Serper when `SERPER_API_KEY` is set (3 credits per restaurant).
+2. Google Places API (New) when `GOOGLE_MAPS_API_KEY` is set, used if Serper fails or has no key.
+
+The branch is verified by street address and postcode before anything is compared. If no source can be read, the report says why (for example a rejected key) instead of listing every row as unresolved. Google values are shown live only and are not written to saved reports; **Refresh profile audit** fetches them again. Menu and ordering links are not published in Google's listing data, so those rows stay unresolved in this mode.
+
+### Google Business Profile (profile you manage)
+
+Uses the same OAuth client and the same redirect URI as Search Console. Two extra steps on the Google side:
+
+1. Enable **My Business Account Management API** and **My Business Business Information API** in the Cloud project.
+2. Request Business Profile API access with the [GBP API contact form](https://developers.google.com/my-business/content/prereqs) ("Application for Basic API Access"). Until Google approves the project, its quota is 0 requests per minute: sign-in succeeds, but **Load my locations** fails with a quota error. Approval needs a profile that has been verified and active for 60+ days and can take several days. Meanwhile, use **Public Google Places listing** or **Profile details you supply**.
 
 ### DataForSEO backlinks
 
@@ -244,7 +269,7 @@ The hosted edition uses browser IndexedDB for audits, candidates, Google search
 observations, checkpoints, and hours records. Stateless Netlify Functions run
 one Google result page, rendered URL check, or hours step per request. Chromium
 is bundled for the Linux serverless runtime; no separate server or paid database
-is needed. Google discovery uses SearchApi only. Exact TXT/CSV/XLSX/XLSM imports
+is needed. Google discovery uses Serper when `SERPER_API_KEY` is set, otherwise SearchApi. Exact TXT/CSV/XLSX/XLSM imports
 have no application row cap, and reports are generated and downloaded locally.
 Website crawling, sitemaps, backlinks, local Google-browser discovery and Search
 Console remain desktop features and are not advertised as hosted capabilities.
@@ -261,7 +286,7 @@ Online rendering has a 12-second navigation timeout and checks one URL at a time
 to fit function limits. Public-network validation and a DNS-pinning proxy protect
 every browser connection, including redirects and subresources. Worker requests
 are rate-limited. API credentials remain in Netlify, not in browser storage.
-Free hosting is subject to Netlify credits/limits; SearchApi and Google Places
+Free hosting is subject to Netlify credits/limits; Serper, SearchApi and Google Places
 have their own quotas and pricing. This is not unlimited free scanning.
 
 For a linked Netlify site, import the project's local credentials before deploying:

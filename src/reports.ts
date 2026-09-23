@@ -103,6 +103,7 @@ export async function writeReports(db: ScanDatabase, scanId: string, scanOverrid
     coverage: {
       googleSiteOperator: 'Diagnostic and not exhaustive',
       googleDiscovery: db.googleDiscovery(scanId),
+      serper: db.googleDiscovery(scanId).some((state) => state.providersUsed?.includes('serper')) || candidates.some((item) => item.sources.some((source) => source.source === 'serper')) ? 'Paginated Google organic results; see per-site coverage' : 'No successful Serper pages recorded',
       searchApi: db.googleDiscovery(scanId).some((state) => state.providersUsed?.includes('searchapi')) || candidates.some((item) => item.sources.some((source) => source.source === 'searchapi')) ? 'Paginated Google organic results; see per-site coverage' : 'No successful SearchApi pages recorded',
       searchConsole: scan.options.discovery.includes('gsc') ? `${scan.options.gscDays}-day Search Analytics window; not an index inventory` : 'Not used',
       backlinks: scan.options.discovery.includes('backlinks')
@@ -455,12 +456,13 @@ function buildSourcesSheet(sheet: Worksheet, candidates: CandidateRecord[], scan
     sitemap: 'URLs exposed by accessible same-site sitemaps',
     crawl: `Rendered same-site crawl capped at ${scan.options.crawlLimit.toLocaleString()} URLs per site`,
     google: `Google organic results from API or browser; ${(scan.options.googleMaxPages ?? 50).toLocaleString()} search pages per site maximum`,
+    serper: 'Google organic results via Serper; see Google Coverage for actual pagination and outcome',
     searchapi: 'Google organic results via SearchApi; see Google Coverage for actual pagination and outcome',
     google_browser: 'Google organic results observed in the local browser; see Google Coverage',
     gsc: `${scan.options.gscDays}-day Search Analytics pages; not an index inventory`,
     backlinks: `DataForSEO backlink index capped at ${(scan.options.backlinkLimit ?? 100_000).toLocaleString()} rows per site; provider-billed and not the entire web`,
   };
-  for (const source of ['import', 'sitemap', 'crawl', 'google', 'searchapi', 'google_browser', 'gsc', 'backlinks']) {
+  for (const source of ['import', 'sitemap', 'crawl', 'google', 'serper', 'searchapi', 'google_browser', 'gsc', 'backlinks']) {
     sheet.addRow([source, sourceCounts.get(source) ?? 0, scan.options.discovery.includes(source as never) || sourceCounts.has(source) ? 'Yes' : 'No', coverage[source]]);
   }
   sheet.addRow([]);

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { compareProfiles, durableReport, resolveIdentity, summarize } from '../../src/profile/audit.js';
 import { emptySnapshot, fact, first, validateImports, type ProfileSnapshot, type ProfileReport } from '../../src/profile/model.js';
-import { fromImported, fromPlace, managedProfiles, paginate, BusinessProfileConnection } from '../../src/profile/providers.js';
+import { fromImported, fromPlace, fromSerperPlace, managedProfiles, paginate, BusinessProfileConnection } from '../../src/profile/providers.js';
 import { dayIntervals, phone, urlKey } from '../../src/profile/normalize.js';
 import { makeWeeklyHours } from '../../src/hours/schedule.js';
 import { mergeScanOptions } from '../../src/config.js';
@@ -145,4 +145,35 @@ test('an identical value republished on every page is recorded once', () => {
   // A genuine disagreement between pages must still surface as a conflict.
   const checks = compareProfiles(s, google(), true, 'GB', 0, []);
   assert.equal(checks.find(c => c.field === 'name')?.verdict, 'source_conflict');
+});
+
+test('a Google Maps listing read via Serper verifies the branch and compares hours, phone and booking link', () => {
+  const w = emptySnapshot('website');
+  for (const [field, value] of Object.entries({ name: 'Abbots Tandoori', address: '6 Langley Rd, Abbots Langley, WD5 0AB', phone: '01923 260 402', website: 'https://www.abbots-tandoori.co.uk/' })) fact(w, field, value, 'https://www.abbots-tandoori.co.uk/', 'test');
+  fact(w, 'phone', '01923 268 455', 'https://www.abbots-tandoori.co.uk/', 'second line');
+  const everyDay = (open: number, close: number) => [0, 1, 2, 3, 4, 5, 6].map((day) => ({ start: day * 1440 + open, end: day * 1440 + close }));
+  fact(w, 'hours', makeWeeklyHours(everyDay(18 * 60, 22 * 60 + 30), [0, 1, 2, 3, 4, 5, 6]), 'https://www.abbots-tandoori.co.uk/', 'jsonld');
+  const g = fromSerperPlace({
+    title: 'Abbots Tandoori', address: '6 Langley Rd, Abbots Langley WD5 0AB, United Kingdom', phoneNumber: '+44 1923 260402',
+    website: 'https://www.abbots-tandoori.co.uk/', placeId: 'ChIJ-test', bookingLinks: ['https://www.abbots-tandoori.co.uk/reservation'],
+    openingHours: { Monday: '6\u201310:30\u202fPM', Tuesday: '6\u201310:30\u202fPM', Wednesday: '6\u201310:30\u202fPM', Thursday: '6\u201310:30\u202fPM', Friday: '5:45\u201311\u202fPM', Saturday: '5:45\u201311\u202fPM', Sunday: '6\u201310:30\u202fPM' },
+  });
+  const identity = resolveIdentity({ url: 'https://www.abbots-tandoori.co.uk/' }, w, [g], 'GB');
+  assert.equal(identity.identity.status, 'verified');
+  assert.equal(identity.identity.placeId, 'ChIJ-test');
+  const checks = compareProfiles(w, g, true, 'GB', 0, []);
+  const verdict = (field: string) => checks.find((check) => check.field === field)?.verdict;
+  // Two restaurant numbers are not a conflict when Google shows one of them.
+  assert.equal(verdict('phone'), 'equivalent');
+  assert.equal(verdict('hours.Monday'), 'match');
+  assert.equal(verdict('hours.Friday'), 'mismatch');
+  assert.equal(g.links[0]?.service, 'reservations');
+  assert.equal(g.coverage['services.reservations']?.state, 'present');
+  // Confirmed mismatches outrank unresolved menu/ordering links in the headline.
+  assert.equal(summarize(checks, [], true).outcome, 'issues');
+});
+
+test('a website typed without https:// is accepted as a profile target', () => {
+  const options = mergeScanOptions({ sites: ['www.example.com'], checkProfile: true, profileTargets: [{ url: 'www.example.com', address: '1 High St, AB1 2CD' }] });
+  assert.equal(options.profileTargets[0]?.url, 'https://www.example.com/');
 });

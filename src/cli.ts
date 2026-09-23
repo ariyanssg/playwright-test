@@ -269,9 +269,9 @@ Scan options:
   --site <url>          Site to discover and scan; repeatable
   --url <url>           Exact URL to scan; repeatable
   --input <file>        TXT, CSV, or XLSX file; repeatable
-  --discover <sources>  google, all, or import,sitemap,crawl,searchapi,gsc,backlinks
+  --discover <sources>  google, all, or import,sitemap,crawl,serper,searchapi,gsc,backlinks
                        Default: google for websites; import for exact URLs/files
-  --google-provider    auto, searchapi, browser (default: auto)
+  --google-provider    auto, serper, searchapi, browser (default: auto: Serper, then SearchApi, then browser)
   --google-country     Google market code (default: gb)
   --google-language    Google language code (default: en)
   --google-max-pages   Total search pages per site (default: 50)

@@ -2,6 +2,7 @@ import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { DISCOVERY_SOURCES, type ScanOptions } from './types.js';
 import { validateHttpUrl, validateImports } from './profile/model.js';
+import { tryNormalizeUrl } from './urls.js';
 
 export const APP_NAME = 'seo404-auditor';
 
@@ -67,7 +68,7 @@ export function mergeScanOptions(input: Partial<ScanOptions>): ScanOptions {
   }
   merged.discovery = [...new Set(merged.discovery)];
   if ((merged.urls.length || merged.inputFiles.length) && !merged.discovery.includes('import')) merged.discovery.unshift('import');
-  if (!['auto', 'searchapi', 'browser'].includes(merged.googleProvider)) throw new Error('Google provider must be auto, searchapi, or browser');
+  if (!['auto', 'serper', 'searchapi', 'browser'].includes(merged.googleProvider)) throw new Error('Google provider must be auto, serper, searchapi, or browser');
   merged.googleCountry = String(merged.googleCountry).toLowerCase();
   merged.googleLanguage = String(merged.googleLanguage).toLowerCase();
   if (!/^[a-z]{2}$/.test(merged.googleCountry)) throw new Error('Google country must be a two-letter country code');
@@ -90,6 +91,8 @@ export function mergeScanOptions(input: Partial<ScanOptions>): ScanOptions {
   if (!Array.isArray(merged.profileTargets)) throw new Error('profileTargets must be an array');
   for (const target of merged.profileTargets) {
     if (!target || typeof target !== 'object') throw new Error('Invalid profile target');
+    // Accept "www.example.com" as the rest of the form does, rather than rejecting it as invalid.
+    if (typeof target.url === 'string') target.url = tryNormalizeUrl(target.url) ?? target.url;
     validateHttpUrl(target.url);
     for (const key of ['name', 'address', 'placeId', 'gbpLocation'] as const) if (target[key] !== undefined && (typeof target[key] !== 'string' || target[key]!.length > 2000)) throw new Error(`Invalid target ${key}`);
     if (target.gbpLocation && !/^locations\/[A-Za-z0-9_-]+$/.test(target.gbpLocation)) throw new Error('GBP location must be locations/{id}');

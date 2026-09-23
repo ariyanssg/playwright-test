@@ -69,7 +69,7 @@ export function createAudit(onProgress, onFinished) {
     box.classList.toggle('hidden', !google.length);
     if (!google.length) return setHtml(box, '');
     const rows = google.map((item) => {
-      const providers = (item.providersUsed?.length ? item.providersUsed : [item.provider]).map((provider) => provider === 'browser' ? 'Local browser' : 'SearchApi').join(' + ');
+      const providers = (item.providersUsed?.length ? item.providersUsed : [item.provider]).map((provider) => ({ browser: 'Local browser', serper: 'Serper', searchapi: 'SearchApi' })[provider] || provider).join(' + ');
       return `<div class="coverage-row"><strong>${e(item.site)}</strong><span class="coverage-state ${e(item.status)}">${e(COVERAGE_STATE[item.status] || item.status)}</span><span class="coverage-meta">${e(providers)} · ${e(item.country.toUpperCase())}/${e(item.language)} · ${number(item.pagesFetched)} search pages · ${number(item.queries.filter((q) => q.done).length)}/${item.queries.length} queries finished</span>${item.error ? `<span class="coverage-error">${e(item.error)}</span>` : ''}</div>`;
     }).join('');
     setHtml(box, `<b>Google search coverage</b><div class="coverage-rows">${rows}</div><small>${scan.total === 0 && !isRunning(scan.status) ? 'No URLs were verified, so this is not a clean-site verdict. ' : ''}Only URLs actually seen in Google results count as Google evidence, and search results are never a complete index.${google.some((item) => item.status === 'limited') ? ' Start a new audit with a larger page budget for more coverage.' : ''}</small>`);

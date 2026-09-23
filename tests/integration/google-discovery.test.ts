@@ -143,6 +143,41 @@ test('Auto falls back visibly, while explicit SearchApi never starts a browser',
   }
 });
 
+test('Auto prefers Serper, records it as evidence, and falls back to SearchApi before the browser', async () => {
+  const saved = { serper: process.env.SERPER_API_KEY, searchapi: process.env.SEARCHAPI_API_KEY };
+  process.env.SERPER_API_KEY = 'serper-for-test';
+  process.env.SEARCHAPI_API_KEY = 'searchapi-for-test';
+  const env = await setup(async (request) => response(request, []));
+  const calls = { serper: 0, searchapi: 0, browser: 0 };
+  let serperFails = false;
+  const directory = await mkdtemp(join(tmpdir(), 'signal404-serper-'));
+  const service = new ScanService(join(directory, 'scan.sqlite'), {
+    serper: async (request) => { calls.serper++; if (serperFails) throw new Error('Not enough credits'); return response(request, request.query.includes(' ') ? [] : [`${env.site.origin}/ok`]); },
+    searchapi: async (request) => { calls.searchapi++; return response(request, []); },
+    browser: () => ({ fetchPage: async (request) => { calls.browser++; return response(request, []); }, close: async () => {} }),
+  });
+  try {
+    const cheap = service.createScan({ ...env.options, googleProvider: 'auto' });
+    assert.equal((await service.start(cheap.id)).status, 'completed');
+    assert.deepEqual(calls, { serper: 5, searchapi: 0, browser: 0 });
+    const [row] = service.results(cheap.id, 0, 10).items;
+    assert.equal(row?.sources[0]?.source, 'serper');
+    assert.deepEqual(service.db.googleDiscovery(cheap.id)[0]?.providersUsed, ['serper']);
+
+    serperFails = true;
+    const fallback = service.createScan({ ...env.options, googleProvider: 'auto' });
+    assert.equal((await service.start(fallback.id)).status, 'completed');
+    assert.equal(calls.searchapi, 5);
+    assert.equal(calls.browser, 0);
+    assert.match(service.getScan(fallback.id)!.warnings.join(), /Serper unavailable \(Not enough credits\); continuing with SearchApi/);
+  } finally {
+    for (const [name, value] of [['SERPER_API_KEY', saved.serper], ['SEARCHAPI_API_KEY', saved.searchapi]] as const) {
+      if (value === undefined) delete process.env[name]; else process.env[name] = value;
+    }
+    service.close(); await env.close();
+  }
+});
+
 test('CAPTCHA Continue and Cancel preserve checkpoints; restart resumes without replaying completed queries', async () => {
   const requests: string[] = [];
   let challenge = true;

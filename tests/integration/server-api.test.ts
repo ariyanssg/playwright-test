@@ -45,6 +45,14 @@ test('localhost API validates requests, secures responses, streams progress, fil
     assert.doesNotMatch(authStart.headers.get('location') ?? '', /api-test-secret/);
     const deniedCallback = await fetch(`${dashboard.url}/api/auth/google/callback?error=access_denied`, { redirect: 'manual' });
     assert.equal(deniedCallback.status, 400);
+    // Search Console and Business Profile must share one registered redirect URI.
+    const { redirectUri } = await fetch(`${dashboard.url}/api/auth/google/redirect-uri`).then((r) => r.json()) as { redirectUri: string };
+    assert.equal(redirectUri, `${dashboard.url}/api/auth/google/callback`);
+    const gbpStart = await fetch(`${dashboard.url}/api/auth/gbp/start`, { redirect: 'manual' });
+    const gbpLocation = new URL(gbpStart.headers.get('location') ?? '');
+    assert.equal(gbpLocation.searchParams.get('redirect_uri'), redirectUri);
+    assert.match(gbpLocation.searchParams.get('scope') ?? '', /business\.manage/);
+    assert.equal(new URL(authStart.headers.get('location') ?? '').searchParams.get('redirect_uri'), redirectUri);
 
     const invalidJson = await fetch(`${dashboard.url}/api/scans`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: '{',

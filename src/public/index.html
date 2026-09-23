@@ -237,12 +237,12 @@
         <div id="google-settings" class="google-settings">
           <p id="google-scope-note" class="field-help">Only URLs seen in Google results enter this audit. Websites are used as search targets.</p>
           <div class="settings-grid">
-            <label><span>Google provider<small>Auto uses the API when a key is set</small></span><select id="google-provider"><option value="auto">Auto</option><option value="searchapi">SearchApi</option><option value="browser">Local browser</option></select></label>
+            <label><span>Google provider<small>Auto picks the cheapest configured API</small></span><select id="google-provider"><option value="auto">Auto</option><option value="serper">Serper</option><option value="searchapi">SearchApi</option><option value="browser">Local browser (free)</option></select></label>
             <label><span>Country<small>Two-letter market code</small></span><input id="google-country" value="gb" pattern="[A-Za-z]{2}" maxlength="2" autocomplete="off" required></label>
             <label><span>Language<small>Google language code</small></span><input id="google-language" value="en" pattern="[A-Za-z]{2,3}(-[A-Za-z]{2,4})?" autocomplete="off" required></label>
             <label><span>Search pages per site<small>Shared by five queries</small></span><input id="google-max-pages" type="number" min="1" value="50" inputmode="numeric" required></label>
           </div>
-          <p id="google-provider-note" class="field-help">The local browser may pause for a CAPTCHA or consent prompt. SearchApi requests use provider credits.</p>
+          <p id="google-provider-note" class="field-help">The local browser may pause for a CAPTCHA or consent prompt. API requests use provider credits.</p>
         </div>
       </section>
 
@@ -553,9 +553,13 @@
   <details class="panel connection-help">
     <summary>How to enable a connection<svg aria-hidden="true"><use href="#i-chevron"/></svg></summary>
     <p>Add the provider credentials to the local <code>.env</code> file, then restart the dashboard. Credentials are never entered or shown in this interface.</p>
+    <div class="redirect-uri" id="redirect-uri" hidden>
+      <p><b>Authorized redirect URI</b> for your Google Cloud OAuth client (Credentials → your Web client → Authorized redirect URIs). Search Console and Business Profile both use it. Open the dashboard at <code id="redirect-origin"></code>, not <code>localhost</code>: Google treats them as different addresses.</p>
+      <div class="copy-row"><code id="redirect-uri-value"></code><button type="button" class="button secondary compact" id="copy-redirect-uri">Copy</button></div>
+    </div>
     <dl>
       <dt>Google search results</dt>
-      <dd>The local browser works without a key. For SearchApi, set <code>SEARCHAPI_API_KEY</code>.</dd>
+      <dd>The local browser works without a key. For an API, set <code>SERPER_API_KEY</code> (Serper, the cheapest) or <code>SEARCHAPI_API_KEY</code>. With both set, Auto uses Serper and falls back to SearchApi.</dd>
       <dt>Google Search Console</dt>
       <dd><code>GOOGLE_CLIENT_ID</code> and <code>GOOGLE_CLIENT_SECRET</code>, then connect your account.</dd>
       <dt>DataForSEO backlinks</dt>
@@ -563,7 +567,7 @@
       <dt>Google Places (hours and public profile)</dt>
       <dd><code>GOOGLE_MAPS_API_KEY</code> — an API key, not the OAuth client above. Enable <b>Places API (New)</b> in Google Cloud, and make sure the key has no IP or HTTP-referrer restriction that blocks this machine. Use <b>Test key</b> to confirm Google accepts it.</dd>
       <dt>Google Business Profile (profile you manage)</dt>
-      <dd><code>GOOGLE_CLIENT_ID</code> and <code>GOOGLE_CLIENT_SECRET</code>, then connect the Google account that manages the restaurant.</dd>
+      <dd><code>GOOGLE_CLIENT_ID</code> and <code>GOOGLE_CLIENT_SECRET</code>, then connect the Google account that manages the restaurant. Google also has to approve Business Profile API access for your Cloud project; until it does, the quota is 0 and loading locations fails.</dd>
     </dl>
     <p>A key that is present is not always a key that works. If a profile audit returns no Google values, test the key here: Google’s own reason for rejecting it is shown in full.</p>
   </details>

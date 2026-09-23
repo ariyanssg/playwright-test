@@ -196,19 +196,26 @@ export class BrowserScanner {
 
 /** Text long enough that a settle wait is unlikely to change the verdict. */
 const SETTLED_TEXT_CHARS = 400;
-/** Upper bound on waiting for a client-rendered page to produce its copy. */
-const MAX_SETTLE_MS = 2_000;
+/**
+ * Upper bound on waiting for a client-rendered page to produce its copy. Restaurant sites built
+ * on ordering platforms routinely set their title and menu 3-4 s after DOMContentLoaded; reading
+ * them at 2 s saw only the shared loading shell, which then "matched" the missing-page baseline
+ * and flagged every page as a soft 404. Server-rendered pages still return immediately.
+ */
+const MAX_SETTLE_MS = 6_000;
 /** A short page whose text has not moved for this long is treated as finished. */
 const STABLE_TEXT_MS = 450;
 /** Phrases worth reading immediately: the verdict is already on the page. */
 const SETTLE_EARLY_EXIT = String.raw`not\s+found|404|410|does\s*n[o']t\s+exist|no\s+longer\s+(?:exists|available)|you\s+seem\s+lost`;
 
+// innerText, not textContent: textContent includes inline <script> source, so a page whose
+// content had not rendered yet still looked "full" and identical to every other page's shell.
 const readSignals = () => {
-  const main = document.querySelector('main, [role="main"], article') ?? document.body;
+  const main = (document.querySelector('main, [role="main"], article') ?? document.body) as HTMLElement | null;
   return {
     title: document.title || '',
     h1: document.querySelector('h1')?.textContent?.trim() || '',
-    mainText: (main?.textContent || '').replace(/\s+/g, ' ').trim(),
+    mainText: (main?.innerText ?? main?.textContent ?? '').replace(/\s+/g, ' ').trim(),
     canonical: document.querySelector<HTMLLinkElement>('link[rel="canonical"]')?.href || null,
   };
 };
@@ -225,22 +232,31 @@ export async function renderPage(page: Page, url: string, timeoutMs: number): Pr
     // The settle wait only exists for client-rendered pages. A non-2xx status is already
     // decided by the classifier, and a page that arrived with its copy has nothing to wait for.
     const status = response.status();
-    if (status >= 200 && status < 300 && content.mainText.length < SETTLED_TEXT_CHARS) {
-      // Wait only as long as the page is still changing: server-rendered pages return at once,
-      // while a client-rendered shell ("Loading…") is given time to swap in its real copy.
+    if (status >= 200 && status < 300) {
+      // Wait until the document has finished loading (images, fonts and styles are blocked, so a
+      // server-rendered page gets there almost at once) and its text has stopped changing.
+      // Length alone is not a signal: a client-rendered site's navigation and footer are
+      // already several hundred characters before the page's own content arrives.
       // The callback is inline and declares no named functions (see harvest.ts on `__name`).
       await page.waitForFunction(({ min, stableMs, early }) => {
-        const root = document.querySelector('main, [role="main"], article') ?? document.body;
-        const text = (root?.textContent || '').replace(/\s+/g, ' ').trim();
+        const root = (document.querySelector('main, [role="main"], article') ?? document.body) as HTMLElement | null;
+        const text = (root?.innerText ?? root?.textContent ?? '').replace(/\s+/g, ' ').trim();
         const probe = `${document.title} ${document.querySelector('h1')?.textContent || ''} ${text.slice(0, 800)}`;
-        if (text.length >= min || new RegExp(early, 'i').test(probe)) return true;
+        if (new RegExp(early, 'i').test(probe)) return true;
+        if (document.readyState === 'complete' && text.length >= min && document.title) {
+          const loaded = (performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming | undefined)?.loadEventEnd ?? 0;
+          // Give scripts that render on "load" one short beat to do so.
+          if (loaded && performance.now() - loaded >= 150) return true;
+        }
         const holder = window as unknown as { __seo404Settle?: { length: number; since: number } };
         const now = performance.now();
         if (!holder.__seo404Settle || holder.__seo404Settle.length !== text.length) {
           holder.__seo404Settle = { length: text.length, since: now };
           return false;
         }
-        return document.readyState === 'complete' && !/loading|please wait/i.test(probe) && now - holder.__seo404Settle.since >= stableMs;
+        // An empty <title> almost always means the app has not rendered yet, so it must hold
+        // still much longer before its text is trusted.
+        return document.readyState === 'complete' && !/loading|please wait/i.test(probe) && now - holder.__seo404Settle.since >= (document.title ? stableMs : stableMs * 4);
       }, { min: SETTLED_TEXT_CHARS, stableMs: STABLE_TEXT_MS, early: SETTLE_EARLY_EXIT }, { timeout: Math.min(MAX_SETTLE_MS, Math.max(250, Math.floor(timeoutMs / 3))), polling: 100 }).catch(() => undefined);
       content = await page.evaluate(readSignals).catch(() => content);
     }

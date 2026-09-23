@@ -1,5 +1,7 @@
 import { setTimeout as delay } from 'node:timers/promises';
 import type { PlaceMatch, PlaceOpeningHours, PlacePeriod, PlacePoint } from '../types.js';
+import { parseTextHours } from './parse-text.js';
+import { DAY_NAMES, WEEK_MINUTES as WEEK } from './schedule.js';
 
 const DEFAULT_ENDPOINT = 'https://places.googleapis.com/v1';
 const TIMEOUT_MS = 30_000;
@@ -128,4 +130,52 @@ function localizedText(value: unknown): string {
     if (typeof text === 'string') return text;
   }
   return '';
+}
+
+/**
+ * The same Google Maps listing read through Serper's Maps endpoint (3 credits, no Google Cloud
+ * key). Its hours arrive as display text ("6–10:30 PM"), so they are parsed with the website
+ * text reader and re-expressed as Places periods: the comparator never sees the difference.
+ */
+export async function searchSerperPlaces(textQuery: string, apiKey = process.env.SERPER_API_KEY): Promise<PlaceMatch[]> {
+  if (!apiKey) throw new Error('SERPER_API_KEY is not set');
+  const response = await fetch(process.env.SERPER_MAPS_ENDPOINT || 'https://google.serper.dev/maps', {
+    method: 'POST',
+    headers: { 'x-api-key': apiKey, 'content-type': 'application/json' },
+    body: JSON.stringify({ q: textQuery, hl: 'en' }),
+    signal: AbortSignal.timeout(TIMEOUT_MS),
+  });
+  let payload: { places?: Array<Record<string, unknown>>; message?: string };
+  try { payload = await response.json() as typeof payload; } catch { throw new Error(`Serper Maps returned an invalid response (HTTP ${response.status})`); }
+  if (!response.ok || (payload.message && !payload.places)) throw new Error(`Serper Maps request failed: ${String(payload.message || `HTTP ${response.status}`).replaceAll(apiKey, '[redacted]')}`);
+  return (payload.places ?? []).slice(0, 5).flatMap((place) => {
+    const placeId = typeof place.placeId === 'string' ? place.placeId : typeof place.cid === 'string' ? `cid:${place.cid}` : null;
+    if (!placeId || typeof place.title !== 'string') return [];
+    return [{
+      placeId,
+      displayName: place.title,
+      formattedAddress: typeof place.address === 'string' ? place.address : '',
+      websiteUri: typeof place.website === 'string' ? place.website : null,
+      utcOffsetMinutes: null,
+      businessStatus: null,
+      regularOpeningHours: serperOpeningHours(place.openingHours),
+    }];
+  });
+}
+
+export function serperOpeningHours(value: unknown): PlaceOpeningHours | null {
+  if (!value || typeof value !== 'object') return null;
+  const descriptions = Object.entries(value as Record<string, unknown>).map(([day, text]) => `${day}: ${String(text).replace(/[  ]/g, ' ')}`);
+  const parsed = parseTextHours([descriptions.join('\n')]);
+  if (!parsed) return { periods: [], weekdayDescriptions: [] };
+  const point = (minute: number): PlacePoint => {
+    const inWeek = ((minute % WEEK) + WEEK) % WEEK;
+    return { day: Math.floor(inWeek / 1440) as PlacePoint['day'], hour: Math.floor((inWeek % 1440) / 60), minute: inWeek % 60 };
+  };
+  const periods: PlacePeriod[] = parsed.weekly.open24x7
+    ? [{ open: { day: 0, hour: 0, minute: 0 } }]
+    : parsed.weekly.intervals.map((interval) => ({ open: point(interval.start), close: point(interval.end) }));
+  // Only days the listing actually shows count as stated, so a missing day is never "closed".
+  const stated = new Set(parsed.weekly.statedDays.map((day) => DAY_NAMES[day]));
+  return { periods, weekdayDescriptions: descriptions.filter((line) => stated.has(line.split(':')[0] as typeof DAY_NAMES[number])) };
 }

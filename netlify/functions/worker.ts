@@ -13,7 +13,7 @@ export default async (request: Request) => {
     return new Response(JSON.stringify(result), { headers });
   } catch (error) {
     let message = error instanceof Error ? error.message : String(error);
-    for (const key of ['SEARCHAPI_API_KEY', 'GOOGLE_MAPS_API_KEY']) { const value = Netlify.env.get(key); if (value) message = message.replaceAll(value, '[redacted]'); }
+    for (const key of ['SERPER_API_KEY', 'SEARCHAPI_API_KEY', 'GOOGLE_MAPS_API_KEY']) { const value = Netlify.env.get(key); if (value) message = message.replaceAll(value, '[redacted]'); }
     return new Response(JSON.stringify({ error: message }), { status: 502, headers });
   }
 };

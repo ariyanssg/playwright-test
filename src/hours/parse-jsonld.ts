@@ -207,7 +207,7 @@ function asArray(value: unknown): unknown[] {
 }
 
 /** Some CMSs wrap the payload in CDATA or an HTML comment. */
-function stripJsonNoise(script: string): string {
+export function stripJsonNoise(script: string): string {
   return script
     .replace(/^\s*<!--/, '')
     .replace(/-->\s*$/, '')

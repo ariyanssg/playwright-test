@@ -43,7 +43,11 @@ test('rendered website, imported profile, link health, durable exports and dashb
     const page=await ui.newPage({viewport:{width:1280,height:900}});
     await page.goto(dashboard.url+'/#new-audit');
     await page.locator('#sites').fill(site.root+'/');
+    // Enabling the profile comparison keeps the chosen URL sources; this test stays offline.
+    assert.equal(await page.locator('[name="discovery"][value="google"]').isChecked(),true);
     await page.locator('#check-profile').check();
+    assert.equal(await page.locator('[name="discovery"][value="google"]').isChecked(),true);
+    await page.locator('[data-preset="import"]').click();
     await page.locator('#profile-mode').selectOption('imported');
     await page.locator('#profile-evidence').fill(JSON.stringify([site.evidence]));
     await page.locator('#profile-address').fill(site.evidence.address!);

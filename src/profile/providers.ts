@@ -3,6 +3,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { appConfigDir } from '../config.js';
 import { GoogleSearchConsole } from '../google.js';
 import { DAY_INDEXES, dayIndexFromToken, makeWeeklyHours, weeklyHoursFromPlaceHours } from '../hours/schedule.js';
+import { parseTextHours } from '../hours/parse-text.js';
 import type { DayIndex, OpenInterval, PlaceOpeningHours } from '../types.js';
 import { emptySnapshot, fact, SERVICES, type ImportedProfile, type ProfileSnapshot, type Service } from './model.js';
 
@@ -19,13 +20,34 @@ export class BusinessProfileConnection extends GoogleSearchConsole {
     const parsed = new URL(url);
     if (!['mybusinessbusinessinformation.googleapis.com', 'mybusinessplaceactions.googleapis.com'].includes(parsed.hostname)) throw new Error('Invalid GBP API host');
     const client = await this.client();
-    const response = await client.request<Json>({ url, method: 'GET', timeout: 30000 });
-    return response.data;
+    try {
+      const response = await client.request<Json>({ url, method: 'GET', timeout: 30000 });
+      return response.data;
+    } catch (error) {
+      throw gbpFailure(error);
+    }
   }
   async locations(): Promise<Array<{ name: string; title: string; address: string }>> {
     const rows = await paginate(`${INFO}/accounts/-/locations?readMask=name,title,storefrontAddress&pageSize=100`, 'locations', url => this.read(url));
     return rows.map(row => ({ name: row.name, title: row.title || '', address: address(row.storefrontAddress) }));
   }
+}
+
+/**
+ * Business Profile APIs are gated: a new Cloud project has a quota of 0 requests per minute
+ * until Google approves its access application, so every call fails with 429 even after a
+ * successful sign-in. Google's message never says that, so the fix is named here.
+ */
+export function gbpFailure(error: unknown): Error {
+  const status = (error as { response?: { status?: number } })?.response?.status ?? (error as { status?: number })?.status;
+  const message = error instanceof Error ? error.message : String(error);
+  if (status === 429 || /quota|rate limit|RESOURCE_EXHAUSTED/i.test(message)) {
+    return new Error(`Google Business Profile API refused the request (${message}). New Google Cloud projects start with a quota of 0 requests per minute: submit the Business Profile API access request at https://developers.google.com/my-business/content/prereqs and wait for approval, or use "Public Google Places listing" or "Profile details you supply" meanwhile.`);
+  }
+  if (status === 403 && /has not been used|disabled|SERVICE_DISABLED/i.test(message)) {
+    return new Error(`${message} Enable "My Business Account Management API" and "My Business Business Information API" for this Google Cloud project.`);
+  }
+  return error instanceof Error ? error : new Error(message);
 }
 
 /**
@@ -88,6 +110,51 @@ export async function publicProfiles(query: string, placeId?: string, signal?: A
   const headers = { 'X-Goog-Api-Key': key || '', 'X-Goog-FieldMask': placeId ? PLACE_FIELDS : PLACE_FIELDS.split(',').map(f => `places.${f}`).join(','), 'content-type': 'application/json' };
   const data = await call(placeId ? `https://places.googleapis.com/v1/places/${encodeURIComponent(placeId)}` : 'https://places.googleapis.com/v1/places:searchText', placeId ? { headers } : { method: 'POST', headers, body: JSON.stringify({ textQuery: query, languageCode: 'en', pageSize: 5 }) });
   return (placeId ? [data] : Array.isArray(data.places) ? data.places : []).map(fromPlace);
+}
+
+/**
+ * The public Google Maps listing read through Serper's Maps endpoint: the same panel customers
+ * see (name, address, phone, website, weekly hours, booking links, place id) for 3 Serper
+ * credits, against a Places API call that bills in the Enterprise tier once hours are requested.
+ * It also works where a Places key is missing or restricted.
+ */
+export async function serperMapsProfiles(query: string, country: string, placeId?: string, signal?: AbortSignal, apiKey = process.env.SERPER_API_KEY): Promise<ProfileSnapshot[]> {
+  if (!apiKey) throw new Error('SERPER_API_KEY is not set');
+  const response = await fetch(process.env.SERPER_MAPS_ENDPOINT || 'https://google.serper.dev/maps', {
+    method: 'POST',
+    headers: { 'x-api-key': apiKey, 'content-type': 'application/json' },
+    body: JSON.stringify({ q: query, gl: country.toLowerCase(), hl: 'en' }),
+    signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(30000)]) : AbortSignal.timeout(30000),
+  });
+  let data: Json;
+  try { data = await response.json() as Json; } catch { throw new Error(`Serper Maps returned an invalid response (HTTP ${response.status})`); }
+  if (!response.ok || (data.message && !data.places)) throw new Error(`Serper Maps request failed: ${String(data.message || `HTTP ${response.status}`).replaceAll(apiKey, '[redacted]')}`);
+  const places: Json[] = Array.isArray(data.places) ? data.places : [];
+  // A supplied Place ID pins the branch; otherwise every candidate goes to address verification.
+  const pinned = placeId ? places.filter(place => place.placeId === placeId) : [];
+  return (pinned.length ? pinned : places.slice(0, 5)).map(fromSerperPlace);
+}
+
+export function fromSerperPlace(data: Json): ProfileSnapshot {
+  const out = emptySnapshot('places', 'The Google Maps listing does not show this field; public absence is not established');
+  out.placeId = typeof data.placeId === 'string' ? data.placeId : undefined;
+  const url = out.placeId ? `https://www.google.com/maps/place/?q=place_id:${encodeURIComponent(out.placeId)}` : `https://www.google.com/maps?cid=${encodeURIComponent(String(data.cid ?? ''))}`;
+  const locator = (field: string) => `Google Maps listing via Serper (${field})`;
+  for (const [field, value] of Object.entries({ name: data.title, address: data.address, phone: data.phoneNumber, website: data.website })) fact(out, field, value, url, locator(field));
+  const opening = data.openingHours && typeof data.openingHours === 'object' ? data.openingHours as Record<string, string> : null;
+  if (opening) {
+    // "6–10:30 PM" style text goes through the same reader as website text, so both sides
+    // land in the identical week model before they are compared.
+    const lines = Object.entries(opening).map(([day, text]) => `${day}: ${String(text).replace(/[\u202f\u00a0]/g, ' ')}`);
+    const parsed = parseTextHours([lines.join('\n')]);
+    if (parsed) fact(out, 'hours', parsed.weekly, url, locator('openingHours'), lines.join('; '));
+    else out.warnings.push(`Google Maps opening hours could not be read: ${lines.join('; ')}`);
+  }
+  const booking = Array.isArray(data.bookingLinks) ? data.bookingLinks.filter((link: unknown): link is string => typeof link === 'string' && /^https?:/.test(link)) : [];
+  for (const link of booking) out.links.push({ service: 'reservations', url: link, label: 'Google Maps booking link', source: 'places' });
+  out.coverage['services.reservations'] = booking.length ? { state: 'present', reason: 'Booking link shown on the Google Maps listing' } : { state: 'unsupported', reason: 'No booking link shown on the listing; absence is not established' };
+  for (const service of ['menu', 'ordering'] as const) out.coverage[`services.${service}`] = { state: 'unsupported', reason: 'The Google Maps listing data does not include this service URL' };
+  return out;
 }
 
 /**

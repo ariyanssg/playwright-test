@@ -1,23 +1,33 @@
 import { createHash } from 'node:crypto';
 import type { ScanDatabase } from '../database.js';
-import type { Candidate, GoogleDiscoveryState, ScanOptions } from '../types.js';
+import type { Candidate, GoogleDiscoveryState, GoogleProviderName, ScanOptions } from '../types.js';
 import { isSameSite, siteOrigin, tryNormalizeUrl } from '../urls.js';
 import { GoogleBrowser } from './google-browser.js';
 import { GoogleChallengeError, googleQueries, type GooglePage, type GoogleSearchRequest } from './google-results.js';
 import { fetchSearchApiPage } from './searchapi.js';
+import { fetchSerperPage } from './serper.js';
 
 export interface GoogleBrowserProvider {
   fetchPage(request: GoogleSearchRequest): Promise<GooglePage>;
   close(): Promise<void>;
 }
 export interface GoogleProviders {
+  serper?: (request: GoogleSearchRequest) => Promise<GooglePage>;
   searchapi: (request: GoogleSearchRequest) => Promise<GooglePage>;
   browser: () => GoogleBrowserProvider;
 }
 export const defaultGoogleProviders: GoogleProviders = {
+  serper: fetchSerperPage,
   searchapi: fetchSearchApiPage,
   browser: () => new GoogleBrowser(),
 };
+
+const PROVIDER_LABEL: Record<GoogleProviderName, string> = { serper: 'Serper', searchapi: 'SearchApi', browser: 'browser' };
+
+/** Auto picks the cheapest configured API, and the free local browser when no key is set. */
+export function autoProvider(): GoogleProviderName {
+  return process.env.SERPER_API_KEY ? 'serper' : process.env.SEARCHAPI_API_KEY ? 'searchapi' : 'browser';
+}
 
 export async function discoverGoogle(site: string, options: ScanOptions, context: {
   db: ScanDatabase;
@@ -28,9 +38,9 @@ export async function discoverGoogle(site: string, options: ScanOptions, context
   waitForUser(message: string): Promise<void>;
 }, providers = defaultGoogleProviders): Promise<GoogleDiscoveryState> {
   const explicit = options.discovery.includes('google') ? options.googleProvider
-    : options.discovery.includes('searchapi') ? 'searchapi' : 'browser';
+    : options.discovery.includes('serper') ? 'serper' : options.discovery.includes('searchapi') ? 'searchapi' : 'browser';
   const state: GoogleDiscoveryState = context.db.googleDiscovery(context.scanId).find((value) => value.site === site) ?? {
-    site, provider: explicit === 'auto' ? (process.env.SEARCHAPI_API_KEY ? 'searchapi' : 'browser') : explicit,
+    site, provider: explicit === 'auto' ? autoProvider() : explicit,
     country: options.googleCountry, language: options.googleLanguage, pagesFetched: 0,
     queries: googleQueries(site).map((query) => ({ query, nextPage: 1, fingerprints: [], done: false })),
     status: 'running', updatedAt: new Date().toISOString(),
@@ -54,10 +64,11 @@ export async function discoverGoogle(site: string, options: ScanOptions, context
         query: query.query, page: query.nextPage, country: state.country, language: state.language,
         nextUrl: state.provider === 'browser' ? query.nextUrl : undefined, signal: context.signal,
       };
-      context.progress(`Google ${state.provider === 'browser' ? 'browser' : 'SearchApi'}: ${query.query} · page ${query.nextPage} · ${state.pagesFetched}/${options.googleMaxPages} pages fetched`);
+      context.progress(`Google ${PROVIDER_LABEL[state.provider]}: ${query.query} · page ${query.nextPage} · ${state.pagesFetched}/${options.googleMaxPages} pages fetched`);
       let page: GooglePage;
       try {
-        page = state.provider === 'searchapi' ? await providers.searchapi(request)
+        page = state.provider === 'serper' ? await (providers.serper ?? fetchSerperPage)(request)
+          : state.provider === 'searchapi' ? await providers.searchapi(request)
           : await (browser ??= providers.browser()).fetchPage(request);
       } catch (error) {
         if (cancelled()) return state;
@@ -73,9 +84,11 @@ export async function discoverGoogle(site: string, options: ScanOptions, context
           continue;
         }
         const message = error instanceof Error ? error.message : String(error);
-        if (state.provider === 'searchapi' && explicit === 'auto') {
-          context.warn(`SearchApi unavailable (${message}); continuing with the local Google browser.`);
-          state.provider = 'browser';
+        if (state.provider !== 'browser' && explicit === 'auto') {
+          // Cheapest working option next: Serper, then SearchApi when it has a key, then the browser.
+          const next: GoogleProviderName = state.provider === 'serper' && process.env.SEARCHAPI_API_KEY ? 'searchapi' : 'browser';
+          context.warn(`${PROVIDER_LABEL[state.provider]} unavailable (${message}); continuing with ${next === 'browser' ? 'the local Google browser' : PROVIDER_LABEL[next]}.`);
+          state.provider = next;
           // Provider-specific pagination links must not leak across providers.
           for (const item of state.queries) item.nextUrl = undefined;
           save();
@@ -93,7 +106,7 @@ export async function discoverGoogle(site: string, options: ScanOptions, context
         const normalizedUrl = tryNormalizeUrl(result.url);
         if (!normalizedUrl || !isSameSite(normalizedUrl, site)) return [];
         return [{ inputUrl: normalizedUrl, normalizedUrl, site: siteOrigin(normalizedUrl), sources: [{
-          source: state.provider === 'searchapi' ? 'searchapi' as const : 'google_browser' as const,
+          source: state.provider === 'browser' ? 'google_browser' as const : state.provider,
           provider: state.provider, query: query.query, resultPage: query.nextPage, searchUrl: page.searchUrl,
           country: state.country, language: state.language, observedAt, resultKind: result.kind,
           title: result.title, snippet: result.snippet, position: result.position,

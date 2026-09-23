@@ -4,6 +4,7 @@ import test from 'node:test';
 import { discoverCrawl } from '../../src/discovery/crawl.js';
 import { discoverBacklinks } from '../../src/discovery/backlinks.js';
 import { fetchSearchApiPage } from '../../src/discovery/searchapi.js';
+import { fetchSerperPage } from '../../src/discovery/serper.js';
 import { discoverSitemaps } from '../../src/discovery/sitemap.js';
 import { RobotsCache } from '../../src/robots.js';
 import { startFixtureSite } from '../helpers/fixture-site.js';
@@ -235,6 +236,45 @@ test('SearchApi reads pagination and sitelinks, rejects malformed successes, and
     await assert.rejects(fetchSearchApiPage(request, 'test-secret'), /didn't return any results/);
   } finally {
     if (previous === undefined) delete process.env.SEARCHAPI_ENDPOINT; else process.env.SEARCHAPI_ENDPOINT = previous;
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
+test('Serper adapter sends one paginated Google page, keeps sitelinks, and redacts its key', async () => {
+  let mode: 'ok' | 'empty' | 'error' = 'ok';
+  const server = createServer(async (request, response) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) chunks.push(chunk as Buffer);
+    const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    assert.equal(request.method, 'POST');
+    assert.equal(request.headers['x-api-key'], 'serper-secret');
+    assert.deepEqual(body, { q: 'site:example.com', gl: 'gb', hl: 'en', page: 2, num: 10 });
+    response.writeHead(mode === 'error' ? 403 : 200, { 'content-type': 'application/json' });
+    if (mode === 'error') return response.end(JSON.stringify({ message: 'Unauthorized: serper-secret has no credits' }));
+    if (mode === 'empty') return response.end(JSON.stringify({ searchParameters: {}, credits: 1 }));
+    response.end(JSON.stringify({ organic: [
+      { position: 11, link: 'https://www.example.com/old-menu', title: 'Old menu', snippet: 'Cached', sitelinks: [{ title: 'Book', link: 'https://www.example.com/book' }] },
+    ], credits: 1 }));
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  if (!address || typeof address === 'string') throw new Error('Mock Serper did not bind');
+  process.env.SERPER_ENDPOINT = `http://127.0.0.1:${address.port}/search`;
+  const request = { query: 'site:example.com', page: 2, country: 'gb', language: 'en' };
+  try {
+    await assert.rejects(fetchSerperPage(request, ''), /SERPER_API_KEY is required/);
+    const page = await fetchSerperPage(request, 'serper-secret');
+    assert.deepEqual(page.results.map((item) => [item.url, item.kind]), [['https://www.example.com/old-menu', 'organic'], ['https://www.example.com/book', 'sitelink']]);
+    assert.equal(page.hasNext, true);
+    assert.match(page.searchUrl, /start=10/);
+    mode = 'empty';
+    const empty = await fetchSerperPage(request, 'serper-secret');
+    assert.equal(empty.results.length, 0);
+    assert.equal(empty.hasNext, false);
+    mode = 'error';
+    await assert.rejects(fetchSerperPage(request, 'serper-secret'), (error: Error) => /credits/.test(error.message) && !error.message.includes('serper-secret'));
+  } finally {
+    delete process.env.SERPER_ENDPOINT;
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   }
 });
