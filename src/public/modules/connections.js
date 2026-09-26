@@ -18,12 +18,16 @@ export async function loadConnections(applyProviderStatus) {
     { name: 'Google Business Profile', description: 'Cross-check the profile you manage, including menu, reservation and ordering links.', symbol: 'store', available: providers?.gbpAuthenticated, connectGbp: providers?.gbpConfigured && !providers.gbpAuthenticated, note: providers?.gbpConfigured ? 'Credentials found · connect the Google account that manages the restaurant' : 'Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET, then connect' },
   ];
   if (globalThis.SIGNAL404_HOSTED) {
-    const builtIn = definitions[0]; builtIn.name = 'Exact URL imports'; builtIn.description = 'Upload TXT, CSV or XLSX lists and verify each URL.'; builtIn.note = 'Files and audit history stay in this browser';
+    const builtIn = definitions[0]; builtIn.description = 'Imports, sitemaps and a rendered site crawl, run online.'; builtIn.note = 'Online crawl cap: 500 pages per site · files and history stay in this browser';
+    const places = definitions.find((item) => item.check); if (places) places.check = false;
     definitions[1].badge = providers?.searchApi ? 'API ready' : providers ? 'Key required' : 'Unavailable';
-    for (let index = definitions.length - 1; index >= 0; index--) if (['gsc', 'backlinks'].includes(definitions[index].source)) definitions.splice(index, 1);
+    // Search Console and the managed Business Profile need a Google sign-in stored on a server.
+    for (let index = definitions.length - 1; index >= 0; index--) if (definitions[index].source === 'gsc' || definitions[index].connectGbp !== undefined) definitions.splice(index, 1);
+    const backlinks = definitions.find((item) => item.source === 'backlinks');
+    if (backlinks) backlinks.note = providers?.dataForSeo ? 'Online cap: 2,000 rows per site · billed by the provider' : 'Add DATAFORSEO_LOGIN and DATAFORSEO_PASSWORD to the Netlify environment';
   }
   $('#provider-cards').innerHTML = definitions.map((provider) => `<article class="surface provider-card"><div class="provider-top"><span class="provider-icon">${icon(provider.symbol)}</span><span class="provider-status ${provider.available ? 'connected' : ''}">${provider.badge || (provider.available ? 'Connected' : provider.available == null ? 'Unavailable' : provider.connect ? 'Ready to connect' : 'Not connected')}</span></div><h2>${provider.name}</h2><p>${provider.description}</p><div class="provider-footer">${provider.connect ? '<a class="button primary compact" href="/api/auth/google/start">Connect Google</a>' : provider.connectGbp ? '<a class="button primary compact" href="/api/auth/gbp/start">Connect Business Profile</a>' : `<small>${provider.note}</small>`}${provider.check ? '<button type="button" class="button secondary compact" data-check-places>Test key</button>' : ''}</div><p class="provider-result" data-provider-result hidden></p></article>`).join('');
-  for (const provider of definitions.filter((provider) => provider.source)) {
+  for (const provider of definitions.filter((provider) => provider.source && !(globalThis.SIGNAL404_HOSTED && provider.source === 'gsc'))) {
     const tag = $(`input[value="${provider.source}"]`).closest('.source-card').querySelector('.source-tag');
     tag.textContent = provider.available ? 'Connected' : provider.available == null ? 'Unavailable' : 'Optional';
     tag.classList.toggle('optional', !provider.available);

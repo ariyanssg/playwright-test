@@ -105,7 +105,8 @@ test('hosted cancellation saves the in-flight result and resumes pending URLs', 
   const env = await fixture(async (body) => { counts.set(body.url, (counts.get(body.url) || 0) + 1); if (body.url.endsWith('/b')) await held; return check(body.url); });
   try {
     const page = await env.browser.newPage(); await page.goto(env.url);
-    const scan = await api(page, '/api/scans', { method: 'POST', body: JSON.stringify({ urls: ['https://restaurant.example/a', 'https://restaurant.example/b', 'https://restaurant.example/c'], discovery: ['import'] }) });
+    const scan = await api(page, '/api/scans', { method: 'POST', body: JSON.stringify({ urls: ['https://restaurant.example/a', 'https://restaurant.example/b', 'https://restaurant.example/c'], discovery: ['import'], concurrency: 1 }) });
+    // One page at a time, so "c" is still pending when the audit is cancelled mid-"b".
     for (let i = 0; i < 100 && !counts.has('https://restaurant.example/b'); i++) await new Promise((r) => setTimeout(r, 30));
     assert.equal(counts.get('https://restaurant.example/b'), 1);
     await api(page, `/api/scans/${scan.id}/cancel`, { method: 'POST' }); release();
@@ -159,5 +160,45 @@ test('hosted hours retry keeps website extraction and successful URL checks', as
     await waitForStatus(page, scan.id, 'failed'); failed = false;
     await api(page, `/api/scans/${scan.id}/resume`, { method: 'POST' }); const done = await waitForStatus(page, scan.id, 'completed');
     assert.equal(done.hoursCounts.match, 1); assert.deepEqual(calls, ['check', 'hours-page', 'hours-compare', 'hours-compare']);
+  } finally { await env.close(); }
+});
+
+test('hosted audits run sitemaps, a rendered crawl and the business profile comparison step by step', async () => {
+  const root = 'https://restaurant.example/';
+  const actions: string[] = [];
+  const snapshot = (url: string) => ({ source: 'website', facts: [{ field: 'name', value: 'Tandoori House', raw: 'Tandoori House', source: 'website', url, locator: 'test', observedAt: '2026-09-26T10:00:00Z', confidence: 'high' }], links: [], coverage: {}, warnings: [], pages: [url], finalUrl: root });
+  const report = (retention: string) => ({ schemaVersion: '1.0', auditId: 'x', targetKey: 'target-1', target: { url: root }, mode: 'public', startedAt: '2026-09-26T10:00:00Z', completedAt: '2026-09-26T10:01:00Z', status: 'completed', identity: { status: 'verified', placeId: 'place-1', reason: 'Matched branch street address' }, checks: [{ field: 'services.menu', verdict: 'match', exactMatch: true, semanticMatch: true, website: [`${root}menu`], google: [`${root}menu`], evidence: [], severity: 'info', reason: 'Published values match exactly', recommendation: '' }], links: [], sources: [], pages: [root], summary: { total: 1, conclusive: 1, matches: 1, equivalent: 0, mismatches: 0, missing: 0, unknown: 0, brokenLinks: 0, outcome: 'pass' }, warnings: [], retention, rules: { version: '1.0', hoursToleranceMinutes: 0, country: 'GB' } });
+  const env = await fixture((body) => {
+    actions.push(body.action);
+    if (body.action === 'sitemap') return { urls: [{ url: `${root}menu`, evidence: { source: 'sitemap', discoveredFrom: `${root}sitemap.xml` } }], warnings: [] };
+    if (body.action === 'crawl-page') return { links: body.url === root ? [`${root}menu`, `${root}contact`] : [], blocked: false };
+    if (body.action === 'check') return check(body.url);
+    if (body.action === 'profile-page') return { url: body.url, finalUrl: body.url, snapshot: snapshot(body.url), next: body.depth === 0 ? [{ url: `${root}contact`, depth: 1 }] : [] };
+    if (body.action === 'profile-google') {
+      assert.ok(body.pages.length >= 2, 'every website page reaches the Google step');
+      return { website: snapshot(root), side: { google: { source: 'places', facts: [], links: [], coverage: {}, warnings: [] }, extras: [], identity: { status: 'verified', placeId: 'place-1', reason: 'Matched' }, verified: true, warnings: [] }, destinations: [{ service: 'menu', url: `${root}menu`, label: 'Menu', source: 'website' }] };
+    }
+    if (body.action === 'profile-link') return { ...body.link, finalUrl: body.link.url, httpStatus: 200, redirectChain: [], health: 'functional', serviceReady: true, correctBranch: true, transactionTested: false, reason: 'ok', checkedAt: '2026-09-26T10:00:00Z' };
+    if (body.action === 'profile-report') return { report: report('session_only'), durable: report('redacted') };
+    throw new Error(`unexpected ${body.action}`);
+  });
+  try {
+    const page = await env.browser.newPage(); await page.goto(`${env.url}/#new-audit`);
+    // Online, Search Console is shown but labelled; the profile comparison is available.
+    await page.locator('#profile-card:not(.hidden)').waitFor();
+    assert.match(await page.locator('[name="discovery"][value="gsc"]').locator('xpath=..').innerText(), /Desktop only/i);
+    assert.equal(await page.locator('[name="discovery"][value="gsc"]').isDisabled(), true);
+    assert.equal(await page.locator('[name="discovery"][value="crawl"]').isVisible() || await page.locator('[name="discovery"][value="crawl"]').locator('xpath=..').isVisible(), true);
+    const scan = await api(page, '/api/scans', { method: 'POST', body: JSON.stringify({ sites: [root], discovery: ['import', 'sitemap', 'crawl'], checkProfile: true, profileMode: 'public' }) });
+    const done = await waitForStatus(page, scan.id, 'completed');
+    for (const action of ['sitemap', 'crawl-page', 'check', 'profile-page', 'profile-google', 'profile-link', 'profile-report']) assert.ok(actions.includes(action), `${action} step ran`);
+    assert.ok(actions.indexOf('profile-google') > actions.lastIndexOf('profile-page'), 'Google is read after every website page');
+    assert.equal(done.scan.total, 3, 'root, sitemap and crawl URLs are de-duplicated');
+    assert.equal(done.profiles[0].retention, 'session_only');
+    // A new page session only has the redacted copy, exactly like a desktop restart.
+    await page.reload();
+    const later = await api(page, `/api/scans/${scan.id}`);
+    assert.equal(later.profiles[0].retention, 'redacted');
+    assert.ok(later.artifacts.includes('profile-audit.json'));
   } finally { await env.close(); }
 });

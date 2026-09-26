@@ -46,15 +46,19 @@ export async function exportFile(scan, candidates, name) {
   const completed = candidates.filter((c) => c.result), findings = completed.filter((c) => ['hard_404', 'gone_410', 'soft_404_suspected'].includes(c.result.classification));
   const hours = [['Site', 'Status', 'Google place', 'Match confidence', 'Website hours URL', 'Daily comparison', 'Notes'], ...scan.hours.map((h) => [h.site, h.status, h.placeName, h.matchConfidence, h.websiteHoursUrl, JSON.stringify(h.days), h.notes.join('; ')])];
   let blob;
-  if (name === 'run.json') blob = new Blob([JSON.stringify({ scan, candidates, hours: scan.hours, coverage: { googleDiscovery: scan.googleDiscovery, storage: 'This browser only', googleSiteOperator: 'Observed results, not a complete index inventory' } }, null, 2)], { type: 'application/json' });
+  const backlinks = [['Site', 'Target URL', 'Source URL', 'Source domain', 'Anchor', 'Dofollow', 'Lost', 'Domain rank', 'First seen', 'Last seen'], ...(scan.backlinks || []).map((b) => [b.site, b.targetUrl, b.sourceUrl, b.sourceDomain, b.anchor, b.dofollow, b.isLost, b.domainRank, b.firstSeen, b.lastSeen])];
+  if (name === 'profile-audit.json') blob = new Blob([JSON.stringify({ schemaVersion: '1.0', note: 'Google values are not stored (Google’s terms); refresh the profile audit to see them again.', reports: scan.profiles || [] }, null, 2)], { type: 'application/json' });
+  else if (name === 'backlinks.csv') blob = new Blob([csv(backlinks)], { type: 'text/csv;charset=utf-8' });
+  else if (name === 'run.json') blob = new Blob([JSON.stringify({ scan, candidates, hours: scan.hours, coverage: { googleDiscovery: scan.googleDiscovery, storage: 'This browser only', googleSiteOperator: 'Observed results, not a complete index inventory' } }, null, 2)], { type: 'application/json' });
   else if (name === 'report.xlsx') {
     const workbook = new ExcelJS.Workbook();
     const sheet = (name, rows) => { const ws = workbook.addWorksheet(name); for (const row of rows) ws.addRow(row.map(safe)); ws.views = [{ state: 'frozen', ySplit: 1 }]; ws.getRow(1).font = { bold: true }; ws.columns.forEach((col) => { col.width = 28; }); return ws; };
     sheet('Summary', [['Audit', scan.id], ['Status', scan.status], ['URLs', scan.total], ['Checked', scan.processed], ['Findings', scan.findings], ['Storage', 'Browser IndexedDB'], ['Coverage', 'Google observations are not a complete index inventory']]);
     sheet('All URLs', [columns, ...completed.map(toRow)]); sheet('Broken & Soft 404', [columns, ...findings.map(toRow)]);
-    sheet('Google Evidence', [['URL', 'Provider', 'Query', 'Page', 'Position', 'Title', 'Snippet', 'Search URL', 'Country', 'Language', 'Observed at', 'Kind'], ...candidates.flatMap((c) => c.sources.filter((s) => s.source === 'searchapi').map((s) => [c.normalizedUrl, s.provider, s.query, s.resultPage, s.position, s.title, s.snippet, s.searchUrl, s.country, s.language, s.observedAt, s.resultKind]))]);
+    sheet('Google Evidence', [['URL', 'Provider', 'Query', 'Page', 'Position', 'Title', 'Snippet', 'Search URL', 'Country', 'Language', 'Observed at', 'Kind'], ...candidates.flatMap((c) => c.sources.filter((s) => ['serper', 'searchapi'].includes(s.source)).map((s) => [c.normalizedUrl, s.provider, s.query, s.resultPage, s.position, s.title, s.snippet, s.searchUrl, s.country, s.language, s.observedAt, s.resultKind]))]);
     sheet('Google Coverage', [['Site', 'Pages fetched', 'Outcome', 'Query', 'Next page', 'Exhausted', 'Error'], ...scan.googleDiscovery.flatMap((s) => s.queries.map((q) => [s.site, s.pagesFetched, s.status, q.query, q.nextPage, q.done, s.error || '']))]);
     if (scan.options.checkHours) sheet('Hours', hours);
+    if (scan.backlinks?.length) sheet('Backlinks', backlinks);
     blob = new Blob([await workbook.xlsx.writeBuffer()], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
   } else blob = new Blob([csv(name === 'hours.csv' ? hours : [columns, ...(name === 'findings.csv' ? findings : completed).map(toRow)])], { type: 'text/csv;charset=utf-8' });
   const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = name; link.click(); setTimeout(() => URL.revokeObjectURL(link.href), 60_000);

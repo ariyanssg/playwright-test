@@ -42,7 +42,11 @@ async function settle(page: Page, capMs: number): Promise<void> {
   }, { stableMs: 1_000 }, { timeout: Math.max(250, capMs), polling: 100 }).catch(() => undefined);
 }
 
-export interface WebsiteOptions { pageLimit: number; timeoutMs: number; hostDelayMs: number; signal?: AbortSignal }
+export interface WebsiteOptions {
+  pageLimit: number; timeoutMs: number; hostDelayMs: number; signal?: AbortSignal;
+  /** Supplies an already network-guarded context (the hosted edition's bundled Chromium). */
+  openContext?: () => Promise<BrowserContext>;
+}
 
 /** Test transport is constructor-only: API callers cannot turn off the public-network guard. */
 export class ProfileBrowser {
@@ -62,16 +66,19 @@ export class ProfileBrowser {
     return this.initializing;
   }
   private async launch(): Promise<BrowserContext> {
-    if (!this.testAllowLocal) this.proxy = await startPublicProxy();
-    this.browser = await chromium.launch({ headless: true, proxy: this.proxy ? { server: this.proxy.server } : undefined, args: this.proxy ? ['--proxy-bypass-list=<-loopback>'] : [] });
-    this.context = await this.browser.newContext({ userAgent: AUDITOR_USER_AGENT, serviceWorkers: 'block', acceptDownloads: false });
+    if (this.options.openContext) this.context = await this.options.openContext();
+    else {
+      if (!this.testAllowLocal) this.proxy = await startPublicProxy();
+      this.browser = await chromium.launch({ headless: true, proxy: this.proxy ? { server: this.proxy.server } : undefined, args: this.proxy ? ['--proxy-bypass-list=<-loopback>'] : [] });
+      this.context = await this.browser.newContext({ userAgent: AUDITOR_USER_AGENT, serviceWorkers: 'block', acceptDownloads: false });
+    }
     await this.context.route('**/*', async route => {
       const r = route.request();
       let hops = 0; for (let prev = r.redirectedFrom(); prev; prev = prev.redirectedFrom()) hops++;
       if (!['GET', 'HEAD', 'OPTIONS'].includes(r.method()) || ['media', 'font'].includes(r.resourceType()) || hops > 10) await route.abort();
       else await route.continue();
     });
-    this.abort = () => { void this.browser?.close().catch(() => {}); };
+    this.abort = () => { void (this.browser ?? this.context)?.close().catch(() => {}); };
     this.options.signal?.addEventListener('abort', this.abort, { once: true });
     return this.context;
   }
@@ -171,6 +178,27 @@ export class ProfileBrowser {
     }
     return out;
   }
+  /**
+   * Reads exactly one page into its own partial snapshot, plus the service/contact links worth
+   * following from it. The hosted edition drives its crawl with this, one worker call per page;
+   * `mergeWebsitePages` then rebuilds the snapshot the desktop `crawl` would have produced.
+   */
+  async inspectPage(target: ProfileTarget, url: string, depth: number, landing?: string): Promise<{ url: string; finalUrl: string; snapshot: WebsiteSnapshot; next: Array<{ url: string; depth: number }> }> {
+    const page = await this.page(url);
+    try {
+      const harvest = await harvestHours(page, url, this.options.timeoutMs);
+      if (harvest.error || !harvest.status || harvest.status >= 400) throw new Error(harvest.error || `HTTP ${harvest.status}`);
+      const content = await readContent(page);
+      if (!content.body.trim()) throw new Error('No rendered content');
+      const finalUrl = page.url();
+      const snapshot: WebsiteSnapshot = { ...emptySnapshot('website'), source: 'website', pages: [url], finalUrl: landing ?? finalUrl };
+      extract(snapshot, harvest, content, target);
+      const next = depth < 2 ? content.links
+        .filter(link => sameHost(link.url, landing ?? finalUrl) && /^https?:/.test(link.url) && !/\.(?:pdf|jpg|png|zip)(?:$|[?#])/i.test(link.url) && /contact|about|hours|menu|reserv|book|order|location/i.test(`${link.label} ${link.url}`))
+        .map(link => ({ url: link.url, depth: depth + 1 })) : [];
+      return { url, finalUrl, snapshot, next };
+    } finally { await page.close().catch(() => {}); }
+  }
   check(link: ServiceLink, target: ProfileTarget, website: WebsiteSnapshot): Promise<LinkCheck> {
     const key = `${link.service}|${link.url}`;
     let pending = this.checked.get(key);
@@ -265,8 +293,30 @@ export class ProfileBrowser {
   }
   async close(): Promise<void> {
     if (this.abort) this.options.signal?.removeEventListener('abort', this.abort);
-    await this.browser?.close().catch(() => {}); await this.proxy?.close(); this.browser = undefined; this.context = undefined; this.initializing = undefined;
+    await (this.browser ?? this.context)?.close().catch(() => {}); await this.proxy?.close(); this.browser = undefined; this.context = undefined; this.initializing = undefined;
   }
+}
+
+/**
+ * Rebuilds one website snapshot from pages read separately (the hosted crawl), in the order they
+ * were read, with the same fact de-duplication and coverage rules as `ProfileBrowser.crawl`.
+ */
+export function mergeWebsitePages(target: ProfileTarget, pages: ReadonlyArray<{ url: string; finalUrl: string; snapshot: WebsiteSnapshot }>, warnings: string[], incomplete: boolean): WebsiteSnapshot {
+  const out: WebsiteSnapshot = { ...emptySnapshot('website'), source: 'website', pages: [], finalUrl: pages[0]?.finalUrl ?? target.url, warnings: [...warnings] };
+  if (pages[0]) fact(out, 'website', pages[0].finalUrl, pages[0].url, 'resolved website landing page');
+  for (const page of pages) {
+    out.pages.push(page.url);
+    for (const item of page.snapshot.facts) fact(out, item.field, item.value, item.url, item.locator, item.raw, item.confidence);
+    out.links.push(...page.snapshot.links);
+    for (const warning of page.snapshot.warnings) if (!out.warnings.includes(warning)) out.warnings.push(warning);
+    for (const [field, entry] of Object.entries(page.snapshot.coverage)) if (entry.state === 'present') out.coverage[field] = entry;
+  }
+  out.links = out.links.filter((l, i, all) => all.findIndex(x => x.service === l.service && x.url === l.url) === i);
+  for (const field of ['name', 'phone', 'website', 'hours', 'special_hours', ...SERVICES.map(s => `services.${s}`)]) {
+    if (out.coverage[field]?.state === 'present') continue;
+    out.coverage[field] = { state: incomplete ? 'partial' : 'not_found', reason: `${incomplete ? 'Incomplete discovery' : 'Not found'} across ${out.pages.length} rendered pages; scope: linked service/contact pages to depth 2` };
+  }
+  return out;
 }
 
 async function readContent(page: Page): Promise<PageContent> {

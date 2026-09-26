@@ -1,6 +1,6 @@
 import { request, createScan } from './api.js';
 import { $, $$, lines, number, notify } from './ui.js';
-const presets = globalThis.SIGNAL404_HOSTED ? { google: ['google'], all: ['import', 'google'], local: ['import'], import: ['import'] } : { google: ['google'], all: ['import', 'sitemap', 'crawl', 'google', 'gsc', 'backlinks'], local: ['import', 'sitemap', 'crawl'], import: ['import'] };
+const presets = globalThis.SIGNAL404_HOSTED ? { google: ['google'], all: ['import', 'sitemap', 'crawl', 'google', 'backlinks'], local: ['import', 'sitemap', 'crawl'], import: ['import'] } : { google: ['google'], all: ['import', 'sitemap', 'crawl', 'google', 'gsc', 'backlinks'], local: ['import', 'sitemap', 'crawl'], import: ['import'] };
 // Each profile source is served by a different Google product, so each has its own
 // prerequisite. Saying which one is missing is the difference between a blank comparison
 // table and a fix the operator can actually carry out.
@@ -32,16 +32,26 @@ export function initSetup(onCreated) {
   const form = $('#scan-form'), fileInput = $('#files'), button = $('#start-button');
   let providerStatus = null;
   if (globalThis.SIGNAL404_HOSTED) {
-    $$('[name="discovery"]').filter((input) => !['google', 'import'].includes(input.value)).forEach((input) => { input.checked = false; input.disabled = true; input.closest('.source-card').classList.add('hidden'); });
-    $('[data-preset="local"]').classList.add('hidden');
-    $('#google-provider').value = 'searchapi'; $('#google-provider option[value="browser"]').disabled = true;
+    // Online, everything runs except what needs a stored Google sign-in or a visible browser.
+    // Those stay on screen, labelled, rather than silently disappearing.
+    const gsc = $('[name="discovery"][value="gsc"]');
+    gsc.checked = false; gsc.disabled = true;
+    gsc.closest('.source-card').classList.add('desktop-only');
+    $('.source-tag', gsc.closest('.source-card')).textContent = 'Desktop only';
+    $('#google-provider option[value="browser"]').disabled = true;
+    $('#google-provider option[value="browser"]').textContent = 'Local browser (desktop only)';
     $('#google-max-pages').max = '100';
-    for (const id of ['concurrency', 'per-host', 'host-delay', 'crawl-limit', 'timeout', 'gsc-days', 'backlink-limit']) {
-      const input = $(`#${id}`); if (!input) continue; input.closest('label').classList.add('hidden');
-      if (id === 'concurrency' || id === 'per-host') input.defaultValue = input.value = '1';
+    // Each page is its own serverless call, so the online limits are tighter.
+    const limits = { concurrency: [3, 4, 'Pages checked at once online (max 4)'], 'crawl-limit': [200, 500, 'Online cap: 500 pages per site'], 'backlink-limit': [1000, 2000, 'Online cap: 2,000 rows per site'], 'profile-pages': [8, 12, 'Online cap: 12 pages per site'] };
+    for (const [id, [value, max, note]] of Object.entries(limits)) {
+      const input = $(`#${id}`); input.defaultValue = input.value = String(value); input.max = String(max);
+      $('small', input.closest('label')).textContent = note;
     }
+    for (const id of ['per-host', 'host-delay', 'timeout', 'gsc-days']) $(`#${id}`).closest('label').classList.add('hidden');
+    $('#group-inspect').classList.add('hidden');
+    for (const mode of ['managed', 'imported']) { const option = $(`#profile-mode option[value="${mode}"]`); option.disabled = true; option.textContent += ' (desktop only)'; }
+    $('#profile-test-key').classList.add('hidden');
   }
-  if (globalThis.SIGNAL404_HOSTED) $('#profile-card').classList.add('hidden');
   const text = (value) => typeof value === 'function' ? value(providerStatus) : value;
   const profileMode = () => {
     const mode = $('#profile-mode').value, source = profileSources[mode] || profileSources.public;
@@ -128,6 +138,9 @@ export function initSetup(onCreated) {
     for (const group of $$('.settings-group')) {
       const optional = $$('[data-needs-source], [data-needs-toggle]', group);
       if (optional.length) group.classList.toggle('hidden', optional.every((label) => label.classList.contains('hidden')));
+      // A group whose every setting is hidden (online, for example) must not leave a bare heading.
+      const labels = $$('.settings-grid > label', group);
+      if (!optional.length && labels.length && labels.every((label) => label.classList.contains('hidden'))) group.classList.add('hidden');
     }
     const comparisons = [$('#check-hours').checked && 'opening hours', $('#check-profile').checked && 'business profile'].filter(Boolean);
     $('#brief-compare').textContent = comparisons.length ? comparisons.join(' + ') : 'Not included';
@@ -180,7 +193,7 @@ export function initSetup(onCreated) {
     const numericFields = { concurrency: 'concurrency', perHostConcurrency: 'per-host', hostDelayMs: 'host-delay', crawlLimit: 'crawl-limit', timeoutMs: 'timeout', gscDays: 'gsc-days', backlinkLimit: 'backlink-limit', hoursToleranceMinutes: 'hours-tolerance', hoursPageLimit: 'hours-pages' };
     const payload = { sites, urls, discovery, inputFiles: [], googleProvider: $('#google-provider').value, googleCountry: $('#google-country').value, googleLanguage: $('#google-language').value, googleMaxPages: Number($('#google-max-pages').value), inspectGoogle: $('#inspect-google').checked, checkHours: $('#check-hours').checked, hoursRequireVerifiedPlace: false, failOn: 'hard' };
     for (const [key, id] of Object.entries(numericFields)) payload[key] = Number($(`#${id}`).value);
-    if ($('#check-profile').checked && !globalThis.SIGNAL404_HOSTED) {
+    if ($('#check-profile').checked) {
       payload.checkProfile = true;
       payload.profileMode = $('#profile-mode').value;
       payload.profilePageLimit = Number($('#profile-pages').value);

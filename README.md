@@ -267,12 +267,21 @@ Publishing `dist` instead produces a root-page 404 because the dashboard's
 
 The hosted edition uses browser IndexedDB for audits, candidates, Google search
 observations, checkpoints, and hours records. Stateless Netlify Functions run
-one Google result page, rendered URL check, or hours step per request. Chromium
-is bundled for the Linux serverless runtime; no separate server or paid database
-is needed. Google discovery uses Serper when `SERPER_API_KEY` is set, otherwise SearchApi. Exact TXT/CSV/XLSX/XLSM imports
-have no application row cap, and reports are generated and downloaded locally.
-Website crawling, sitemaps, backlinks, local Google-browser discovery and Search
-Console remain desktop features and are not advertised as hosted capabilities.
+one step per request (a Google result page, a sitemap read, one crawled page,
+one rendered URL check, one profile page, one link check), and the dashboard
+drives the steps, several at once. Chromium is bundled for the Linux serverless
+runtime; no separate server or paid database is needed.
+
+Online, an audit can use exact imports (TXT/CSV/XLSX/XLSM, no row cap), Google
+results (Serper, or SearchApi), sitemaps, a rendered site crawl (up to 500
+pages per site), DataForSEO backlinks (up to 2,000 rows per site, when the
+credentials are set), opening hours, and the full business profile comparison
+against the public Google listing. Reports are generated and downloaded
+locally. Two things stay desktop-only and are labelled as such in the form:
+Search Console (it needs a stored Google sign-in) and reading Google Search's
+business panel for links the Maps listing omits (it needs a visible browser and
+a person to answer CAPTCHAs). The managed Business Profile and supplied-details
+profile modes are also desktop-only.
 
 Keep the audit tab open while scanning. After a tab closes or reloads, Resume
 continues from committed browser checkpoints. A request interrupted before its

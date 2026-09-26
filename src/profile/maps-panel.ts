@@ -1,4 +1,4 @@
-import type { Page } from 'playwright';
+import type { BrowserContext, Page } from 'playwright';
 import { acquireBrowser, releaseBrowser } from '../browser.js';
 import type { Service, ServiceLink } from './model.js';
 
@@ -16,9 +16,10 @@ export interface MapsPanelLinks {
  * restaurant's own ordering page and delivery platforms, so it is opened and read. Evaluated
  * callbacks are inline with no named inner functions (see hours/harvest.ts on `__name`).
  */
-export async function readMapsServiceLinks(placeId: string, country: string, timeoutMs = 20_000): Promise<MapsPanelLinks> {
-  const browser = await acquireBrowser();
-  const context = await browser.newContext({ locale: 'en-GB', viewport: { width: 1280, height: 900 } });
+export async function readMapsServiceLinks(placeId: string, country: string, timeoutMs = 20_000, openContext?: () => Promise<BrowserContext>): Promise<MapsPanelLinks> {
+  // The hosted edition supplies its own bundled, network-guarded Chromium; locally the shared one is used.
+  const shared = openContext ? null : await acquireBrowser();
+  const context = openContext ? await openContext() : await shared!.newContext({ locale: 'en-GB', viewport: { width: 1280, height: 900 } });
   // The panel's links live in the DOM; images, fonts and video only slow the page down.
   await context.route('**/*', (route) => ['image', 'media', 'font'].includes(route.request().resourceType()) ? route.abort() : route.continue());
   const page = await context.newPage();
@@ -38,7 +39,7 @@ export async function readMapsServiceLinks(placeId: string, country: string, tim
     return result;
   } finally {
     await context.close().catch(() => undefined);
-    await releaseBrowser();
+    if (shared) await releaseBrowser();
   }
 }
 
