@@ -83,6 +83,38 @@ test('rendered website, imported profile, link health, durable exports and dashb
   } finally {await ui.close();await dashboard.close();service.close();await site.close();}
 });
 
+test('menu, booking and order buttons on the Google Maps listing are compared with the website', {timeout:45000},async()=>{
+  const site=await fixture(), directory=await mkdtemp(join(tmpdir(),'profile-panel-'));
+  const asked:string[]=[];
+  const service=new ScanService(join(directory,'audit.sqlite'),undefined,{browser:browser(),
+    publicRead:async()=>({id:'fixture-place',displayName:{text:'Rimjhim Southampton'},formattedAddress:site.evidence.address,websiteUri:site.root+'/',internationalPhoneNumber:'+44 23 8019 0100'}),
+    // The listing shows booking and ordering (the restaurant's own page plus a platform) but no menu.
+    mapsPanel:async(placeId)=>{asked.push(placeId);return {links:[
+      {service:'reservations',url:site.root+'/book',label:'Google Maps reservation link',source:'places'},
+      {service:'ordering',url:site.root+'/order',label:'Google Maps "Place an order": own site',source:'places'},
+      {service:'ordering',url:'https://delivery.example/abbots',label:'Google Maps "Place an order": delivery.example',source:'places'},
+    ],observed:{menu:false,reservations:true,ordering:true}};},
+    // Google Search's business panel carries the menu link that the Maps listing omits.
+    searchPanel:async(query)=>{asked.push(query);return [
+      {attr:'kc:/local:menu',label:'restaurant.test',href:site.root+'/menu'},
+      {attr:'kc:/local:order_food',label:'delivery.example',href:'https://www.google.com/url?q=https%3A%2F%2Fdelivery.example%2Fabbots%3Futm_source%3Dgoogle'},
+      {attr:'kc:/local:table_reservations',label:'Providers',href:'https://support.google.com/reserve?p=link_ranking'},
+    ];}});
+  try {
+    const scan=service.createScan({profileTargets:[{url:site.root+'/',placeId:'fixture-place'}],checkProfile:true,profileMode:'public',outputDir:directory,hostDelayMs:0,timeoutMs:5000});
+    await service.start(scan.id);
+    const live=service.profiles(scan.id)[0]!;
+    // Maps first; the Search panel is only consulted for what Maps did not show (the menu).
+    assert.equal(asked[0],'fixture-place');
+    assert.match(asked[1]!,/Rimjhim Southampton/);
+    const verdict=(field:string)=>live.checks.find(c=>c.field===field)?.verdict;
+    assert.equal(verdict('services.menu'),'match');
+    assert.equal(verdict('services.reservations'),'match');
+    assert.equal(verdict('services.ordering'),'match');
+    assert.ok(live.links.some(l=>l.source==='places'&&l.url==='https://delivery.example/abbots'));
+  } finally {service.close();await site.close();}
+});
+
 test('public API partial coverage is explicit and Google values never reach disk', {timeout:45000},async()=>{
   const site=await fixture(), directory=await mkdtemp(join(tmpdir(),'profile-public-'));
   const service=new ScanService(join(directory,'audit.sqlite'),undefined,{browser:browser(),publicRead:async()=>({id:'fixture-place',displayName:{text:'SECRET GOOGLE NAME'},formattedAddress:site.evidence.address,websiteUri:site.root+'/',internationalPhoneNumber:'+44 23 8019 0100'})});

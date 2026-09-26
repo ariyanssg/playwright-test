@@ -128,6 +128,11 @@ function scanOptions(fixture: FixtureSite, directory: string, overrides: Partial
   };
 }
 
+
+// Hours tests drive mock Places endpoints; a Serper key exported in the shell must not route
+// them to the real Serper API (the hours lookup prefers Serper when a key is present).
+delete process.env.SERPER_API_KEY;
+
 test('a missing Places key degrades to a warning without failing the scan', async () => {
   const fixture = await startFixtureSite();
   const directory = await mkdtemp(join(tmpdir(), 'seo404-hours-nokey-'));
@@ -138,7 +143,7 @@ test('a missing Places key degrades to a warning without failing the scan', asyn
     const scan = service.createScan(scanOptions(fixture, directory));
     const completed = await service.start(scan.id);
     assert.equal(completed.status, 'completed');
-    assert.match(completed.warnings.join('\n'), /hours .*GOOGLE_MAPS_API_KEY is required/);
+    assert.match(completed.warnings.join('\n'), /hours comparison: set SERPER_API_KEY \(cheapest\) or GOOGLE_MAPS_API_KEY/);
     assert.equal(service.db.hoursCount(scan.id), 0);
     // The 404 audit is unaffected by the hours stage failing.
     assert.equal(completed.processed, 5);

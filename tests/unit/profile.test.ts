@@ -177,3 +177,21 @@ test('a website typed without https:// is accepted as a profile target', () => {
   const options = mergeScanOptions({ sites: ['www.example.com'], checkProfile: true, profileTargets: [{ url: 'www.example.com', address: '1 High St, AB1 2CD' }] });
   assert.equal(options.profileTargets[0]?.url, 'https://www.example.com/');
 });
+
+test('Google Maps links are unwrapped and stripped of tracking before comparison', async () => {
+  const { cleanLink } = await import('../../src/profile/maps-panel.js');
+  assert.equal(cleanLink('https://www.google.com/url?q=https%3A%2F%2Fwww.example.com%2Forder%3Futm_source%3Dgoogle%26branch%3D2'), 'https://www.example.com/order?branch=2');
+  assert.equal(cleanLink('https://deliveroo.co.uk/menu/x?utm_medium=affiliate&rwg_token=abc'), 'https://deliveroo.co.uk/menu/x');
+  assert.equal(cleanLink('javascript:void(0)'), null);
+});
+
+test('Google Search business panel rows become service links, and help links are ignored', async () => {
+  const { searchPanelLinks } = await import('../../src/profile/maps-panel.js');
+  const links = searchPanelLinks([
+    { attr: 'kc:/local:menu', label: 'abbots-tandoori.co.uk', href: 'https://www.abbots-tandoori.co.uk/menu' },
+    { attr: 'kc:/local:order_food', label: 'just-eat.co.uk', href: 'https://www.just-eat.co.uk/restaurants-abbots/menu?utm_source=google' },
+    { attr: 'kc:/local:table_reservations', label: 'Providers', href: 'https://support.google.com/reserve?p=link_ranking' },
+    { attr: 'kc:/location/location:address', label: 'Address', href: 'https://www.google.com/search?q=address' },
+  ]);
+  assert.deepEqual(links.map((link) => [link.service, link.url]), [['menu', 'https://www.abbots-tandoori.co.uk/menu'], ['ordering', 'https://www.just-eat.co.uk/restaurants-abbots/menu']]);
+});

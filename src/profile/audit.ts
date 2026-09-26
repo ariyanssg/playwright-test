@@ -5,11 +5,14 @@ import { addressMatch, dayIntervals, formatIntervals, phone, sameHost, textKey, 
 import { CORE_FIELDS, emptySnapshot, first, SERVICES, type ImportedProfile, type ProfileCheck, type ProfileMode, type ProfileReport, type ProfileSnapshot, type ProfileTarget, type WebsiteSnapshot, type Fact, type LinkCheck } from './model.js';
 import { BusinessProfileConnection, fromImported, managedProfiles, publicProfiles, serperMapsProfiles, type ApiRead } from './providers.js';
 import { ProfileBrowser } from './website.js';
+import { readMapsServiceLinks, searchPanelLinks } from './maps-panel.js';
+import { GoogleBrowser } from '../discovery/google-browser.js';
+import { GoogleChallengeError } from '../discovery/google-results.js';
 
 const LINK_CHECK_PARALLEL = 4;
 
-export interface AuditOptions { mode: ProfileMode; pageLimit: number; timeoutMs: number; hostDelayMs: number; country: string; tolerance: number; signal?: AbortSignal }
-export interface AuditDependencies { browser?: Pick<ProfileBrowser, 'crawl' | 'check' | 'close'>; publicRead?: ApiRead; managedRead?: ApiRead; imported?: ImportedProfile[]; gbp?: BusinessProfileConnection }
+export interface AuditOptions { mode: ProfileMode; pageLimit: number; timeoutMs: number; hostDelayMs: number; country: string; tolerance: number; signal?: AbortSignal; waitForGoogle?: (message: string) => Promise<void> }
+export interface AuditDependencies { browser?: Pick<ProfileBrowser, 'crawl' | 'check' | 'close'>; mapsPanel?: typeof readMapsServiceLinks; searchPanel?: (query: string, signal?: AbortSignal) => Promise<Array<{ attr: string; label: string; href: string }>>; publicRead?: ApiRead; managedRead?: ApiRead; imported?: ImportedProfile[]; gbp?: BusinessProfileConnection }
 export function targetKey(target: ProfileTarget): string { return createHash('sha256').update(JSON.stringify([target.url, target.placeId || '', target.gbpLocation || '', target.address || ''])).digest('hex').slice(0, 24); }
 
 export async function auditProfile(auditId: string, target: ProfileTarget, options: AuditOptions, pages: string[] = [], deps: AuditDependencies = {}): Promise<ProfileReport> {
@@ -44,6 +47,46 @@ export async function auditProfile(auditId: string, target: ProfileTarget, optio
     if (!candidates.length && acquisitionError) resolution.identity = { status: 'unmatched', placeId: null, reason: `Google listing could not be read: ${acquisitionError}` };
     const google = resolution.snapshot ?? emptySnapshot(options.mode === 'public' ? 'places' : options.mode === 'managed' ? 'gbp_managed' : 'imported', 'No verified Google branch; comparisons unavailable');
     const verified = resolution.identity.status === 'verified';
+    // Menu, booking and ordering links are published on the Maps listing and in Google Search's
+    // business panel, and neither API returns them. Maps is read silently first; the Search panel
+    // (which needs a real, visible browser) only fills in what Maps did not show.
+    const live = options.mode === 'public' && !deps.publicRead;
+    const panel = deps.mapsPanel ?? (live ? readMapsServiceLinks : undefined);
+    if (verified && google.placeId && !options.signal?.aborted && (panel || deps.searchPanel || live)) {
+      let mapsRead = false, searchRead = false;
+      if (panel) {
+        try {
+          const found = await panel(google.placeId, options.country, options.timeoutMs);
+          addLinks(google, found.links);
+          mapsRead = true;
+        } catch (error) { warnings.push(`Google Maps listing buttons could not be read (${error instanceof Error ? error.message : String(error)})`); }
+      }
+      const gaps = SERVICES.filter(service => !google.links.some(l => l.service === service));
+      if (gaps.length && (deps.searchPanel || live)) {
+        const query = [first<string>(google, 'name'), first<string>(google, 'address')].filter(Boolean).join(' ');
+        const searchBrowser = deps.searchPanel ? null : new GoogleBrowser();
+        const read = deps.searchPanel ?? ((q: string, signal?: AbortSignal) => searchBrowser!.localPanel(q, signal));
+        try {
+          for (let attempt = 0; attempt < 3 && !options.signal?.aborted; attempt++) {
+            try { addLinks(google, searchPanelLinks(await read(query, options.signal))); searchRead = true; break; }
+            catch (error) {
+              if (!(error instanceof GoogleChallengeError) || !options.waitForGoogle) throw error;
+              await options.waitForGoogle(error.message);
+            }
+          }
+        } catch (error) {
+          warnings.push(`Google Search business panel could not be read (${error instanceof Error ? error.message : String(error)}); ${gaps.join(', ')} links on Google stay unresolved`);
+        } finally { await searchBrowser?.close().catch(() => undefined); }
+      }
+      for (const service of SERVICES) {
+        const count = google.links.filter(l => l.service === service).length;
+        // Maps can omit a link that Google Search still shows (a menu link, typically), so absence
+        // is only claimed once the Search business panel itself has been read.
+        google.coverage[`services.${service}`] = count ? { state: 'present', reason: `${count} link(s) on Google` }
+          : searchRead ? { state: 'not_found', reason: `Not shown on ${mapsRead ? 'the Google Maps listing or ' : ''}the Google Search business panel` }
+          : { state: 'partial', reason: mapsRead ? 'Not shown on the Google Maps listing, and Google Search’s business panel could not be checked' : 'Google’s listing buttons could not be read' };
+      }
+    }
     const websiteDestinations = [website, ...(verified ? [google] : [])].flatMap(s => {
       const url = first<string>(s, 'website'); return url ? [{ service: 'website' as const, url, source: s.source, label: 'Official website' }] : [];
     });
@@ -75,6 +118,10 @@ export async function auditProfile(auditId: string, target: ProfileTarget, optio
     if (report.retention === 'session_only') report.warnings.push('Google values and comparisons are shown live only and are not saved (Google’s terms). They stay on screen for an hour or until the dashboard restarts; Refresh profile audit fetches them again.');
     return report;
   } finally { await browser.close(); }
+}
+
+function addLinks(snapshot: ProfileSnapshot, links: ProfileSnapshot['links']): void {
+  for (const link of links) if (!snapshot.links.some(l => l.service === link.service && l.url === link.url)) snapshot.links.push(link);
 }
 
 /** Prefix that marks a failure to read Google, which saved reports keep (it holds no Google data). */
@@ -190,6 +237,9 @@ export function compareProfiles(website: ProfileSnapshot, google: ProfileSnapsho
     const field = `services.${service}`, w = website.links.filter(l => l.service === service), g = google.links.filter(l => l.service === service);
     const check = { ...baseCheck(field, website, google), website: w.map(l => l.url), google: g.map(l => l.url) };
     const absent = missing(check, website, google, verified);
+    const noun = service === 'menu' ? 'menu' : service === 'reservations' ? 'booking' : 'online ordering';
+    if (absent?.verdict === 'missing_google') absent.recommendation = `The website has a ${noun} link but the Google listing shows none. Add it in Google Business Profile (Edit profile → ${service === 'menu' ? 'Menu link' : service === 'reservations' ? 'Bookings' : 'Order ahead'}) so customers can use it from Google.`;
+    else if (absent?.verdict === 'missing_website') absent.recommendation = `Google shows a ${noun} link that the website does not. Link to it from the website too, or remove it from the listing if it is out of date.`;
     if (absent) checks.push(absent);
     else {
       const exact = g.some(gl => w.some(wl => wl.url === gl.url));

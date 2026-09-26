@@ -450,7 +450,7 @@ export class ScanService {
         // One restaurant's failure is recorded against that restaurant; it never fails the audit.
         let report: ProfileReport;
         try {
-          report = await auditProfile(scanId, target, { mode: options.profileMode, pageLimit: options.profilePageLimit, timeoutMs: options.timeoutMs, hostDelayMs: options.hostDelayMs, country: options.googleCountry.toUpperCase(), tolerance: options.profileHoursTolerance, signal }, candidates, { gbp: this.gbp, imported: options.profileEvidence, ...this.profileDependencies });
+          report = await auditProfile(scanId, target, { mode: options.profileMode, pageLimit: options.profilePageLimit, timeoutMs: options.timeoutMs, hostDelayMs: options.hostDelayMs, country: options.googleCountry.toUpperCase(), tolerance: options.profileHoursTolerance, signal, waitForGoogle: (message) => this.waitForGoogle(scanId, message, 'comparing_profile') }, candidates, { gbp: this.gbp, imported: options.profileEvidence, ...this.profileDependencies });
         } catch (error) {
           this.warnAdapter(scanId, 'profile', target.url, error);
           continue;
@@ -462,7 +462,7 @@ export class ScanService {
     }));
   }
 
-  private async waitForGoogle(scanId: string, message: string): Promise<void> {
+  private async waitForGoogle(scanId: string, message: string, resumeStatus: 'discovering' | 'comparing_profile' = 'discovering'): Promise<void> {
     await new Promise<void>((resolve) => {
       // Register before emitting; a fast Continue/Cancel cannot be lost.
       this.googleWaiters.set(scanId, resolve);
@@ -471,7 +471,7 @@ export class ScanService {
       if (this.db.isCancelled(scanId)) resolve();
     });
     this.googleWaiters.delete(scanId);
-    if (!this.db.isCancelled(scanId)) this.db.updateScan(scanId, { status: 'discovering' });
+    if (!this.db.isCancelled(scanId)) this.db.updateScan(scanId, { status: resumeStatus });
   }
 
   private async inspectFindings(scanId: string): Promise<void> {

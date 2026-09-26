@@ -17,6 +17,9 @@ export const servicePattern: Record<Service, RegExp> = {
   ordering: /\b(?:order(?:ing)?(?: online| now)?|takeaway|takeout|delivery|click.{0,5}collect)\b/i,
 };
 export interface PageContent { title: string; body: string; names: string[]; addresses: string[]; phones: Array<{raw:string;value:string}>; links: Array<{url:string;label:string}>; headings: string[]; forms: string[]; frames: Array<{url:string;title:string}> }
+/** How each service's destination is named in reasons shown to the user. */
+const SERVICE_PAGE: Record<Service, string> = { website: 'the website', menu: 'a menu page', reservations: 'a booking page', ordering: 'an online ordering page' };
+
 /** Service and contact pages of one site read at once after the landing page. */
 const CRAWL_PARALLEL_PAGES = 3;
 
@@ -34,8 +37,9 @@ async function settle(page: Page, capMs: number): Promise<void> {
       holder.__seo404Link = { length: text.length, since: now };
       return false;
     }
-    return document.readyState === 'complete' && text.length > 0 && now - holder.__seo404Link.since >= stableMs;
-  }, { stableMs: 400 }, { timeout: Math.max(250, capMs), polling: 100 }).catch(() => undefined);
+    // An untitled page is usually a client-side app that has not rendered yet: give it longer.
+    return document.readyState === 'complete' && text.length > 0 && now - holder.__seo404Link.since >= (document.title ? stableMs : stableMs * 4);
+  }, { stableMs: 1_000 }, { timeout: Math.max(250, capMs), polling: 100 }).catch(() => undefined);
 }
 
 export interface WebsiteOptions { pageLimit: number; timeoutMs: number; hostDelayMs: number; signal?: AbortSignal }
@@ -193,7 +197,9 @@ export class ProfileBrowser {
         await response.dispose(); return result;
       }
       const response = await page.goto(link.url, { waitUntil: 'domcontentloaded', timeout: this.options.timeoutMs });
-      await settle(page, Math.min(1_500, this.options.timeoutMs / 4));
+      // Ordering and booking widgets on restaurant platforms often render 2-4 s after load, and
+      // arrive in bursts with pauses between them, so the page must hold still for a full second.
+      await settle(page, Math.min(6_000, this.options.timeoutMs / 3));
       result.httpStatus = response?.status() ?? null; result.finalUrl = page.url();
       for (let req = response?.request() ?? null; req; req = req.redirectedFrom()) {
         const res = await req.response(); result.redirectChain.unshift({ url: req.url(), status: res?.status() ?? null, location: res?.headers()['location'] });
@@ -221,25 +227,39 @@ export class ProfileBrowser {
         if (content.names.length && nameKey && content.names.every(n => textKey(n) !== nameKey) && !bodyKey.includes(nameKey)) result.correctBranch = false;
         const scopedText = `${content.headings.join(' ')} ${content.body}`;
         const menuReady = /(?:£|€|\$)\s*\d|\b(?:starters|main courses|desserts|appetizers|biryani|curries)\b/i.test(content.body);
-        const bookingReady = /date|time|guests|party|people|covers/i.test(content.forms.join(' ')) && /reserv|book|table/i.test(scopedText);
-        const orderReady = /add to (?:basket|cart)|choose (?:delivery|collection)|start (?:your )?order|checkout|view basket/i.test(content.body);
+        const bookingReady = /date|time|guests?|party|people|persons?|diners?|covers/i.test(content.forms.join(' ')) && /reserv|book|table/i.test(scopedText);
+        // An online ordering page is a priced item list with collection/delivery wording, even when
+        // its basket buttons only appear after an item is chosen.
+        const prices = content.body.match(/(?:£|€|\$)\s*\d+(?:\.\d{2})?/g)?.length ?? 0;
+        const orderReady = /add to (?:basket|cart)|choose (?:delivery|collection)|start (?:your )?order|checkout|view basket/i.test(content.body)
+          || (prices >= 3 && /\b(?:collection|delivery|basket|cart|order(?:s|ing)?)\b/i.test(content.body) && /\border/i.test(`${content.headings.join(' ')} ${content.title}`));
         result.serviceReady = link.service === 'website' ? content.body.trim().length > 20 : link.service === 'menu' ? menuReady : link.service === 'reservations' ? bookingReady : orderReady;
         // A confirmed branch that served a real page is never a broken destination. When the
         // service interface cannot be recognized there, the page is unverified, not wrong:
         // calling a restaurant's own working menu page "wrong destination" is a false alarm.
+        // A link on the restaurant's own site that is labelled for one service but lands on an
+        // unrelated page (an "Order Online" button opening About Us) is a broken link, not an
+        // unconfirmed one. Headings and the path decide; titles are too often site-wide.
+        const pageTopic = `${content.headings.join(' ')} ${new URL(result.finalUrl).pathname.replace(/[-_/]+/g, ' ')}`;
+        const misdirected = link.service !== 'website' && result.correctBranch === true && !result.serviceReady
+          && sameHost(result.finalUrl, website.finalUrl) && !servicePattern[link.service].test(pageTopic) && !/reserv|book|table/i.test(link.service === 'reservations' ? pageTopic : '');
         result.health = result.correctBranch === false ? 'wrong_location'
+          : misdirected ? 'wrong_destination'
           : result.serviceReady && result.correctBranch === true ? 'functional'
           : /temporarily unavailable|not accepting (?:orders|reservations)/i.test(content.body) ? 'temporarily_unavailable'
           : result.correctBranch === true || content.frames.length ? 'unverified'
           : 'wrong_destination';
       }
+      const landed = content.headings.find(h => h.trim()) || content.title || new URL(result.finalUrl).pathname;
       result.reason = result.health === 'functional' ? 'Correct restaurant and service interface observed; no transaction submitted'
+        : result.health === 'wrong_destination' && result.correctBranch === true ? `The "${link.label.trim() || link.service}" link opens "${landed.trim().slice(0, 80)}" (${new URL(result.finalUrl).pathname}), which is not ${SERVICE_PAGE[link.service]}. Point it at the ${SERVICE_PAGE[link.service].replace(/^an? /, '')}.`
+        : result.health === 'unverified' && result.correctBranch === null && result.serviceReady ? `Opens (HTTP ${status ?? 'unknown'}) and shows ${SERVICE_PAGE[link.service].replace(/ page$/, ' interface')}, but the page does not show this branch's address or phone, so it cannot be confirmed as this restaurant. Open it to check.`
         : result.health === 'unverified' && result.correctBranch === true ? `Reached the correct restaurant (HTTP ${status ?? 'unknown'}), but the ${link.service} interface could not be confirmed automatically. Open the page to check it yourself.`
         : `${result.health.replaceAll('_', ' ')}; HTTP ${status ?? 'unknown'}, service readiness ${result.serviceReady ?? 'unknown'}, branch ${result.correctBranch ?? 'unknown'}`;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       result.health = /timeout|timed out/i.test(message) ? 'timeout' : /blocked|robots/i.test(message) ? 'blocked' : 'network_error';
-      result.reason = message.slice(0, 500);
+      result.reason = /robots/i.test(message) ? `${new URL(link.url).hostname} does not allow automated checks (robots.txt), so this link was not opened. Open it yourself to confirm it works.` : message.slice(0, 500);
     } finally { await page?.close().catch(() => {}); }
     return result;
   }
@@ -258,7 +278,7 @@ async function readContent(page: Page): Promise<PageContent> {
     phones: Array.from(document.querySelectorAll('a[href^="tel:"]')).slice(0, 20).map(n => ({ raw: n.textContent?.trim() || '', value: (n.getAttribute('href') || '').slice(4) })),
     links: Array.from(document.querySelectorAll('a[href]')).slice(0, 1000).map(n => ({ url: (n as HTMLAnchorElement).href, label: `${n.textContent || ''} ${n.getAttribute('aria-label') || ''}`.trim().slice(0, 300) })),
     headings: Array.from(document.querySelectorAll('h1,h2,h3,[role="heading"]')).slice(0, 50).map(n => n.textContent?.trim() || ''),
-    forms: Array.from(document.querySelectorAll('input,select,button')).slice(0, 100).map(n => `${n.getAttribute('name') || ''} ${n.getAttribute('type') || ''} ${n.getAttribute('aria-label') || ''} ${n.textContent?.slice(0, 100) || ''}`),
+    forms: Array.from(document.querySelectorAll('input,select,button')).slice(0, 100).map(n => `${n.getAttribute('name') || ''} ${n.getAttribute('type') || ''} ${n.getAttribute('aria-label') || ''} ${n.getAttribute('placeholder') || ''} ${n.textContent?.slice(0, 100) || ''}`),
     frames: Array.from(document.querySelectorAll('iframe')).slice(0, 10).map(n => ({ url: n.src, title: n.title })),
   }));
 }

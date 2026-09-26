@@ -50,7 +50,11 @@ export function createAudit(onProgress, onFinished) {
       resumeButton.innerHTML = `${icon(resumeGlyph)}<span>${resumeLabel}</span>`;
     }
     const stages = ['discovering', 'scanning', ...(state.summary?.scan.options.checkHours ? ['comparing_hours'] : []), ...(state.summary?.scan.options.checkProfile ? ['comparing_profile'] : []), 'reporting'];
-    const current = done ? stages.length : stages.indexOf(progress.status === 'waiting_for_google' ? 'discovering' : progress.status);
+    // Google can pause discovery or the profile comparison; stay on whichever stage was running.
+    if (stages.includes(progress.status)) state.stage = progress.status;
+    // A page opened mid-pause has no history: once every page is checked, it is the profile step.
+    const pausedAt = state.stage || (progress.total && progress.processed >= progress.total && state.summary?.scan.options.checkProfile ? 'comparing_profile' : 'discovering');
+    const current = done ? stages.length : stages.indexOf(progress.status === 'waiting_for_google' ? pausedAt : progress.status);
     $$('.stage-track [data-stage]').forEach((element) => {
       const index = stages.indexOf(element.dataset.stage);
       element.classList.toggle('skipped', index === -1);
@@ -200,7 +204,7 @@ export function createAudit(onProgress, onFinished) {
     if (state.id === id && state.summary) return;
     stop(); state.resultsController?.abort();
     const generation = ++state.generation;
-    state.id = id; state.summary = null; state.page = 0; state.items = []; state.total = 0;
+    state.id = id; state.summary = null; state.stage = null; state.page = 0; state.items = []; state.total = 0;
     $('#result-search').value = ''; $('#classification-filter').value = 'all';
     $('#empty-state').classList.add('hidden'); $('#run-view').classList.remove('hidden');
     $('#run-view').setAttribute('aria-busy', 'true');

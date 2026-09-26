@@ -70,6 +70,38 @@ export class GoogleBrowser {
     } finally { request.signal?.removeEventListener('abort', abort); }
   }
 
+  /**
+   * Reads the local business panel beside a Google Search result: its menu, order and
+   * reservation rows (`data-attrid="kc:/local:…"`). Google only renders that panel for a real
+   * browser session, which is why this uses the persistent, visible profile. A CAPTCHA or
+   * consent screen raises GoogleChallengeError so the audit can wait for the person.
+   */
+  async localPanel(query: string, signal?: AbortSignal): Promise<Array<{ attr: string; label: string; href: string }>> {
+    await this.open(signal);
+    signal?.throwIfAborted();
+    await delay(Math.max(0, (this.options.delayMs ?? 1500) - (Date.now() - this.lastRequest)), undefined, { signal });
+    const page = this.page && !this.page.isClosed() ? this.page : (this.page = await this.context!.newPage());
+    const url = new URL('https://www.google.com/search');
+    url.search = new URLSearchParams({ q: query, hl: 'en' }).toString();
+    // After a CAPTCHA the person may already have landed on the results; do not reload them.
+    if (!(new URL(page.url()).pathname === '/search' && new URL(page.url()).searchParams.get('q') === query)) {
+      await page.goto(url.href, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+    }
+    this.lastRequest = Date.now();
+    await page.waitForFunction(() => document.querySelector('[data-attrid^="kc:/local:"], #rso, #captcha-form, iframe[src*="recaptcha"]') || /unusual traffic|before you continue/i.test(document.body?.innerText ?? ''), undefined, { timeout: 10_000 }).catch(() => undefined);
+    const blocked = /\/sorry\/|consent\.google\./.test(page.url()) || await page.locator('#captcha-form, iframe[src*="recaptcha"]').count() > 0
+      || /unusual traffic|before you continue/i.test(await page.evaluate(() => document.body?.innerText.slice(0, 2000) ?? ''));
+    if (blocked) {
+      await page.bringToFront();
+      throw new GoogleChallengeError('Google needs your attention to read the business panel. Resolve the CAPTCHA or consent prompt in the Google browser, then choose Continue.');
+    }
+    // Panel rows render a moment after the results.
+    await page.locator('[data-attrid^="kc:/local:"]').first().waitFor({ timeout: 5_000 }).catch(() => undefined);
+    return page.evaluate(() => Array.from(document.querySelectorAll('[data-attrid^="kc:/local:"]'))
+      .flatMap((row) => Array.from(row.querySelectorAll('a[href]'))
+        .map((link) => ({ attr: row.getAttribute('data-attrid') || '', label: (link.textContent || '').replace(/\s+/g, ' ').trim(), href: (link as HTMLAnchorElement).href }))));
+  }
+
   private async open(signal?: AbortSignal): Promise<void> {
     if (this.context) return;
     const previous = browserQueue;
