@@ -13,7 +13,8 @@ import { isPublicAddress, publicAddress, publicUrl } from '../../src/hosted/netw
 async function fixture(worker: (body: any) => any) {
   const directory = await mkdtemp(join(tmpdir(), 'signal404-hosted-'));
   await cp('src/public', directory, { recursive: true });
-  await writeFile(join(directory, 'runtime.js'), 'window.SIGNAL404_HOSTED = true;');
+  // Retries keep their production shape, only shorter, so failure paths stay fast to test.
+  await writeFile(join(directory, 'runtime.js'), 'window.SIGNAL404_HOSTED = true; window.SIGNAL404_RETRY_DELAYS = [20, 20];');
   await build({ entryPoints: ['src/hosted/client.js'], outfile: join(directory, 'modules/hosted.js'), bundle: true, format: 'esm', platform: 'browser', external: ['./hosted-exports.js'] });
   await build({ entryPoints: ['src/hosted/exports.js'], outfile: join(directory, 'modules/hosted-exports.js'), bundle: true, format: 'esm', platform: 'browser' });
   const server = createServer(async (request, response) => {
@@ -21,7 +22,7 @@ async function fixture(worker: (body: any) => any) {
       if (request.url === '/api/worker') {
         let text = ''; for await (const chunk of request) text += chunk;
         const body = JSON.parse(text);
-        const value = body.action === 'providers' ? { searchApi: true, googleMaps: false, googleBrowser: false } : await worker(body);
+        const value = body.action === 'providers' ? { searchApi: true, googleMaps: false, googleBrowser: false } : await batched(worker, body);
         response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(value)); return;
       }
       const path = request.url === '/' ? 'index.html' : request.url!.slice(1);
@@ -33,6 +34,26 @@ async function fixture(worker: (body: any) => any) {
   const address = server.address(); if (!address || typeof address === 'string') throw new Error('No listener');
   const browser = await chromium.launch();
   return { directory, browser, url: `http://127.0.0.1:${address.port}`, close: async () => { await browser.close(); await new Promise<void>((resolve) => server.close(() => resolve())); } };
+}
+/**
+ * The worker takes batches (several pages per call); fixtures describe one page at a time. A
+ * page whose fixture throws is reported as skipped, as the real worker does when a page cannot be
+ * finished within its time budget.
+ */
+async function batched(worker: (body: any) => any, body: any) {
+  if (body.action === 'check') {
+    const results = [], skipped = [];
+    for (const url of body.urls) { try { results.push({ url, result: (await worker({ ...body, url })).result }); } catch (error: any) { if (error.transport) throw error; skipped.push(url); } }
+    return { results, skipped, baselines: {} };
+  }
+  if (body.action === 'hours-pages') {
+    const pages = [], errors = [];
+    for (const item of body.items) { const page = await worker({ action: 'hours-page', url: item.url, score: item.score }); if (page.extraction) pages.push(page.extraction); else errors.push(`${item.url}: ${page.error}`); }
+    return { pages, errors, skipped: [] };
+  }
+  if (body.action === 'profile-pages') return { pages: await Promise.all(body.items.map((item: any) => worker({ action: 'profile-page', target: body.target, url: item.url, depth: item.depth, landing: body.landing }))) };
+  if (body.action === 'profile-links') return { checks: await Promise.all(body.links.map((link: any) => worker({ action: 'profile-link', target: body.target, link, website: body.website }))) };
+  return worker(body);
 }
 function check(url: string) {
   return { result: { inputUrl: url, normalizedUrl: url, site: new URL(url).origin, sources: [], httpStatus: 200, finalUrl: url, redirectChain: [{ url, status: 200 }], classification: url.includes('404') ? 'soft_404_suspected' : 'ok', confidence: 0.99, reasons: ['Fixture evidence'], robotsAllowed: null, title: 'Restaurant', h1: '', canonical: null, contentType: 'text/html', responseMs: 50, checkedAt: new Date().toISOString(), error: null }, baseline: null, baselineChecked: true };
@@ -71,7 +92,7 @@ test('hosted Google audits save browser checkpoints, merge evidence, export loca
   } finally { await env.close(); }
 });
 
-test('hosted retry preserves completed checks and concurrent tabs cannot start duplicate workers', async () => {
+test('a page that keeps failing leaves a partial audit, and resume finishes it without duplicate workers', async () => {
   const counts = new Map<string, number>(); let fail = true;
   const env = await fixture(async (body) => {
     counts.set(body.url, (counts.get(body.url) || 0) + 1);
@@ -81,14 +102,27 @@ test('hosted retry preserves completed checks and concurrent tabs cannot start d
   try {
     const context = await env.browser.newContext(), page = await context.newPage(); await page.goto(env.url);
     const scan = await api(page, '/api/scans', { method: 'POST', body: JSON.stringify({ urls: ['https://restaurant.example/a', 'https://restaurant.example/b'], discovery: ['import'] }) });
-    await waitForStatus(page, scan.id, 'failed');
-    const failed = await api(page, `/api/scans/${scan.id}`);
+    // One unreachable page no longer fails the audit: the rest is reported and the gap is named.
+    const failed = await waitForStatus(page, scan.id, 'completed_partial');
     assert.equal(failed.scan.processed, 1, JSON.stringify(failed.scan));
+    assert.ok(failed.scan.warnings.some((warning: string) => /1 page could not be checked online.*Resume/.test(warning)), JSON.stringify(failed.scan.warnings));
     await page.reload(); fail = false;
     const other = await context.newPage(); await other.goto(env.url);
     await Promise.all([api(page, `/api/scans/${scan.id}/resume`, { method: 'POST' }), api(other, `/api/scans/${scan.id}/resume`, { method: 'POST' })]);
     await waitForStatus(page, scan.id, 'completed');
-    assert.equal(counts.get('https://restaurant.example/a'), 1); assert.equal(counts.get('https://restaurant.example/b'), 2);
+    assert.equal(counts.get('https://restaurant.example/a'), 1); assert.ok(counts.get('https://restaurant.example/b')! >= 2);
+  } finally { await env.close(); }
+});
+
+test('busy and restarted workers are retried with backoff before a step counts as failed', async () => {
+  let attempts = 0;
+  // A transport-level failure is the whole call answering 503, like a busy or restarting worker.
+  const env = await fixture(async (body) => { if (++attempts < 3) throw Object.assign(new Error('Rate limited'), { transport: true }); return check(body.url); });
+  try {
+    const page = await env.browser.newPage(); await page.goto(env.url);
+    const scan = await api(page, '/api/scans', { method: 'POST', body: JSON.stringify({ urls: ['https://restaurant.example/a'], discovery: ['import'] }) });
+    const done = await waitForStatus(page, scan.id, 'completed');
+    assert.equal(done.scan.processed, 1);
   } finally { await env.close(); }
 });
 
@@ -99,21 +133,22 @@ test('hosted network guard rejects private, mapped, link-local and reserved targ
   await assert.rejects(publicAddress('127.0.0.1'), /Private/);
 });
 
-test('hosted cancellation saves the in-flight result and resumes pending URLs', async () => {
+test('hosted cancellation saves the in-flight batch and resumes pending URLs', async () => {
   let release!: () => void; const held = new Promise<void>((resolve) => { release = resolve; });
   const counts = new Map<string, number>();
   const env = await fixture(async (body) => { counts.set(body.url, (counts.get(body.url) || 0) + 1); if (body.url.endsWith('/b')) await held; return check(body.url); });
   try {
     const page = await env.browser.newPage(); await page.goto(env.url);
-    const scan = await api(page, '/api/scans', { method: 'POST', body: JSON.stringify({ urls: ['https://restaurant.example/a', 'https://restaurant.example/b', 'https://restaurant.example/c'], discovery: ['import'], concurrency: 1 }) });
-    // One page at a time, so "c" is still pending when the audit is cancelled mid-"b".
+    // Eight pages make two batches (six, then two); one call at a time, so the second is still pending.
+    const urls = 'abcdefgh'.split('').map((letter) => `https://restaurant.example/${letter}`);
+    const scan = await api(page, '/api/scans', { method: 'POST', body: JSON.stringify({ urls, discovery: ['import'], concurrency: 1 }) });
     for (let i = 0; i < 100 && !counts.has('https://restaurant.example/b'); i++) await new Promise((r) => setTimeout(r, 30));
     assert.equal(counts.get('https://restaurant.example/b'), 1);
     await api(page, `/api/scans/${scan.id}/cancel`, { method: 'POST' }); release();
-    const cancelled = await waitForStatus(page, scan.id, 'cancelled'); assert.equal(cancelled.scan.processed, 2);
+    const cancelled = await waitForStatus(page, scan.id, 'cancelled'); assert.equal(cancelled.scan.processed, 6);
     await page.reload(); await api(page, `/api/scans/${scan.id}/resume`, { method: 'POST' });
-    const done = await waitForStatus(page, scan.id, 'completed'); assert.equal(done.scan.processed, 3);
-    assert.deepEqual([...counts.values()], [1, 1, 1]);
+    const done = await waitForStatus(page, scan.id, 'completed'); assert.equal(done.scan.processed, 8);
+    assert.deepEqual([...counts.values()], [1, 1, 1, 1, 1, 1, 1, 1]);
   } finally { release(); await env.close(); }
 });
 
@@ -137,11 +172,13 @@ test('closing an active browser session preserves committed checks and offers re
   const env = await fixture(async (body) => { counts.set(body.url, (counts.get(body.url) || 0) + 1); if (body.url.endsWith('/b') && counts.get(body.url) === 1) await held; return check(body.url); });
   try {
     const page = await env.browser.newPage(); await page.goto(env.url);
-    const scan = await api(page, '/api/scans', { method: 'POST', body: JSON.stringify({ urls: ['https://restaurant.example/a', 'https://restaurant.example/b'], discovery: ['import'] }) });
-    for (let i = 0; i < 100 && !counts.has('https://restaurant.example/b'); i++) await new Promise((r) => setTimeout(r, 30));
+    // Two websites are two batches, so one can finish while the other is still in flight.
+    const scan = await api(page, '/api/scans', { method: 'POST', body: JSON.stringify({ urls: ['https://one.example/a', 'https://two.example/b'], discovery: ['import'] }) });
+    for (let i = 0; i < 100 && (!counts.has('https://two.example/b') || !counts.has('https://one.example/a')); i++) await new Promise((r) => setTimeout(r, 30));
+    await new Promise((r) => setTimeout(r, 200));
     await page.reload(); const paused = await waitForStatus(page, scan.id, 'cancelled'); assert.equal(paused.scan.processed, 1);
     release(); await api(page, `/api/scans/${scan.id}/resume`, { method: 'POST' }); await waitForStatus(page, scan.id, 'completed');
-    assert.equal(counts.get('https://restaurant.example/a'), 1); assert.equal(counts.get('https://restaurant.example/b'), 2);
+    assert.equal(counts.get('https://one.example/a'), 1); assert.equal(counts.get('https://two.example/b'), 2);
   } finally { release(); await env.close(); }
 });
 
@@ -157,9 +194,14 @@ test('hosted hours retry keeps website extraction and successful URL checks', as
   try {
     const page = await env.browser.newPage(); await page.goto(env.url);
     const scan = await api(page, '/api/scans', { method: 'POST', body: JSON.stringify({ urls: ['https://restaurant.example/'], discovery: ['import'], checkHours: true }) });
-    await waitForStatus(page, scan.id, 'failed'); failed = false;
+    // The listing failure is this restaurant's result ("not checked"), not a failed audit.
+    const partial = await waitForStatus(page, scan.id, 'completed_partial'); failed = false;
+    assert.equal(partial.hoursCounts.not_checked, 1);
+    assert.match(partial.hours[0].notes[0], /Places access blocked.*Resume/);
     await api(page, `/api/scans/${scan.id}/resume`, { method: 'POST' }); const done = await waitForStatus(page, scan.id, 'completed');
-    assert.equal(done.hoursCounts.match, 1); assert.deepEqual(calls, ['check', 'hours-page', 'hours-compare', 'hours-compare']);
+    assert.equal(done.hoursCounts.match, 1);
+    assert.deepEqual(calls.filter((call) => call !== 'hours-compare'), ['check', 'hours-page'], 'website pages are read once and kept');
+    assert.ok(calls.filter((call) => call === 'hours-compare').length >= 2);
   } finally { await env.close(); }
 });
 

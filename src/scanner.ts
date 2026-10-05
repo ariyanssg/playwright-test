@@ -343,7 +343,7 @@ async function redirectCount(request: Request): Promise<number> {
   return count;
 }
 
-function networkFailure(url: string, error: string, responseMs = 0): RenderedPage {
+export function networkFailure(url: string, error: string, responseMs = 0): RenderedPage {
   return {
     requestedUrl: url,
     status: null,

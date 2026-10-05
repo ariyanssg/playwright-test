@@ -12,8 +12,8 @@ import { GoogleSearchConsole } from './google.js';
 import { importRowsFromFile, type ImportedRow } from './imports.js';
 import { auditSiteHours } from './hours/audit.js';
 import { HoursInspector } from './hours/inspector.js';
-import type { PlaceHints, PlaceLookup } from './hours/match.js';
-import { fetchPlaceDetails, searchPlaces, searchSerperPlaces } from './hours/places.js';
+import type { PlaceHints } from './hours/match.js';
+import { placeLookup } from './hours/places.js';
 import { selectHoursPages } from './hours/pages.js';
 import { holdBrowser } from './browser.js';
 import { RobotsCache } from './robots.js';
@@ -354,21 +354,10 @@ export class ScanService {
       return;
     }
 
-    // Google Maps data via Serper first (cheapest, and unaffected by Cloud key restrictions),
-    // Places API as the fallback. A Serper failure is noted rather than silently swallowed.
-    const lookup: PlaceLookup = {
-      search: async (query) => {
-        if (process.env.SERPER_API_KEY) {
-          try { return await searchSerperPlaces(query); }
-          catch (error) {
-            if (!process.env.GOOGLE_MAPS_API_KEY) throw error;
-            this.db.appendWarning(scanId, `hours: Serper Maps unavailable (${error instanceof Error ? error.message : String(error)}); used Google Places instead`);
-          }
-        }
-        return searchPlaces(query);
-      },
-      details: (placeId) => process.env.GOOGLE_MAPS_API_KEY && !placeId.startsWith('cid:') ? fetchPlaceDetails(placeId) : Promise.resolve(null),
-    };
+    const lookup = placeLookup({ serper: process.env.SERPER_API_KEY, maps: process.env.GOOGLE_MAPS_API_KEY }, {
+      country: options.googleCountry,
+      onFallback: (message) => this.db.appendWarning(scanId, `hours: ${message}`),
+    });
     const inspector = new HoursInspector({
       perHostConcurrency: options.perHostConcurrency,
       hostDelayMs: options.hostDelayMs,
