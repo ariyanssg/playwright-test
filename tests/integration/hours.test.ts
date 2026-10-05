@@ -14,6 +14,7 @@ interface PlacesMock {
   origin: string;
   requests: Array<{ path: string; apiKey: string | undefined; fieldMask: string | undefined; body: string }>;
   displayName: { text: string };
+  formattedAddress: string;
   websiteUri: string | null;
   businessStatus: string;
   openMondayOnGoogle: boolean;
@@ -33,6 +34,7 @@ async function startPlacesMock(): Promise<PlacesMock> {
   const requests: PlacesMock['requests'] = [];
   const state = {
     displayName: { text: 'Blue Fin Sushi' },
+    formattedAddress: '12 Ocean Ave, San Francisco, CA 94110',
     websiteUri: null as string | null,
     businessStatus: 'OPERATIONAL',
     openMondayOnGoogle: true,
@@ -60,7 +62,7 @@ async function startPlacesMock(): Promise<PlacesMock> {
       const place = {
         id: 'places/blue-fin',
         displayName: state.displayName,
-        formattedAddress: '12 Ocean Ave, San Francisco, CA 94110',
+        formattedAddress: state.formattedAddress,
         websiteUri: state.websiteUri,
         utcOffsetMinutes: -480,
         businessStatus: state.businessStatus,
@@ -96,6 +98,8 @@ async function startPlacesMock(): Promise<PlacesMock> {
     set displayName(value) { state.displayName = value; },
     get websiteUri() { return state.websiteUri; },
     set websiteUri(value) { state.websiteUri = value; },
+    get formattedAddress() { return state.formattedAddress; },
+    set formattedAddress(value) { state.formattedAddress = value; },
     get businessStatus() { return state.businessStatus; },
     set businessStatus(value) { state.businessStatus = value; },
     get openMondayOnGoogle() { return state.openMondayOnGoogle; },
@@ -225,6 +229,9 @@ test('an unverified listing is flagged everywhere and skipped in strict mode', a
   process.env.GOOGLE_MAPS_API_KEY = 'places-test-key';
   process.env.GOOGLE_PLACES_ENDPOINT = places.origin;
   places.websiteUri = 'https://someone-else.example';
+  // Same name at another address: matched by name only. (At the restaurant's own street address
+  // the listing would count as verified even with a wrong website link.)
+  places.formattedAddress = '98 Harbor Rd, Oakland, CA 94607';
 
   const lenient = new ScanService(join(directory, 'lenient.sqlite'));
   try {

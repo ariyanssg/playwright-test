@@ -8,6 +8,7 @@ import { ProfileBrowser } from './website.js';
 import { readMapsServiceLinks, searchPanelLinks } from './maps-panel.js';
 import { GoogleBrowser } from '../discovery/google-browser.js';
 import { GoogleChallengeError } from '../discovery/google-results.js';
+import { nameSimilarity, NAME_SIMILARITY_FLOOR } from '../hours/match.js';
 
 const LINK_CHECK_PARALLEL = 4;
 
@@ -184,17 +185,24 @@ export function resolveIdentity(target: ProfileTarget, website: ProfileSnapshot,
     const actualAddress = first<string>(snapshot, 'address') || '';
     const addressMatches = expectedAddresses.some(expected => addressMatch(expected, actualAddress));
     const phoneMatches = expectedPhones.includes(phone(first<string>(snapshot, 'phone') || '', country));
-    const hostMatches = sameHost(first<string>(snapshot, 'website') || '', target.url);
+    // The site may redirect to another domain; either address of it is the restaurant's own.
+    const listed = first<string>(snapshot, 'website') || '';
+    const landing = (website as Partial<WebsiteSnapshot>).finalUrl;
+    const hostMatches = sameHost(listed, target.url) || Boolean(landing && sameHost(listed, landing));
+    const expectedName = target.name || first<string>(website, 'name') || '';
+    const nameMatches = Boolean(expectedName && nameSimilarity(first<string>(snapshot, 'name') || '', expectedName) >= NAME_SIMILARITY_FLOOR);
     // A branch address is independent evidence even when name, telephone or GBP URL is wrong.
     const addressConflict = Boolean(expectedAddresses.length && actualAddress && /\d/.test(actualAddress) && expectedAddresses.some(expected => /\d/.test(expected)) && !addressMatches);
-    const score = addressMatches ? 3 : !addressConflict && phoneMatches && hostMatches ? 2 : 0;
+    // Without an address, a listing that links to this site, carries its name and has no
+    // conflicting address is the restaurant; several such listings stay ambiguous below.
+    const score = addressMatches ? 3 : addressConflict ? 0 : phoneMatches && hostMatches ? 2 : hostMatches && nameMatches ? 1 : 0;
     return { snapshot, score };
   }).sort((a, b) => b.score - a.score);
   const best = scored[0];
   if (!best) return { identity: { status: 'unmatched', placeId: null, reason: 'No profile acquired' } };
-  if (!best.score) return { identity: { status: 'unverified', placeId: best.snapshot.placeId || null, reason: 'A supplied ID/name/domain alone cannot verify a restaurant branch; add its street address and postcode.' } };
-  if (scored[1]?.score === best.score) return { identity: { status: 'ambiguous', placeId: null, reason: 'Multiple profiles match this branch; supply a specific Place ID or GBP location.' } };
-  return { snapshot: best.snapshot, identity: { status: 'verified', placeId: best.snapshot.placeId || null, reason: best.score === 3 ? 'Matched branch street address/postcode independently of name and website URL' : 'Matched telephone and website host' } };
+  if (!best.score) return { identity: { status: 'unverified', placeId: best.snapshot.placeId || null, reason: 'No Google listing could be confirmed as this branch: none matched its street address, or its phone number and website together. Add the branch street address and postcode (or a Place ID) and refresh.' } };
+  if (scored[1]?.score === best.score) return { identity: { status: 'ambiguous', placeId: null, reason: 'Several Google listings match this restaurant equally well (a chain with more than one branch). Add the branch street address and postcode, or a Place ID, to pick one.' } };
+  return { snapshot: best.snapshot, identity: { status: 'verified', placeId: best.snapshot.placeId || null, reason: best.score === 3 ? 'Matched branch street address/postcode independently of name and website URL' : best.score === 2 ? 'Matched telephone and website host' : 'The listing links to this website and carries the restaurant name; no conflicting address was found' } };
 }
 
 function baseCheck(field: string, website: ProfileSnapshot, google: ProfileSnapshot): ProfileCheck {
@@ -227,7 +235,10 @@ export function compareProfiles(website: ProfileSnapshot, google: ProfileSnapsho
     if (!websiteFact || !gf[0]) { checks.push({ ...check, reason: 'Field could not be parsed' }); continue; }
     const w = String(websiteFact.value).trim(), g = String(gf[0].value).trim();
     const final = (url: string) => links.find(l => l.url === url && l.health === 'functional')?.finalUrl;
-    const semantic = field === 'website' ? Boolean(urlKey(w) === urlKey(g) || (final(w) && final(w) === final(g))) : Boolean(key(websiteFact) && key(websiteFact) === key(gf[0]));
+    // A listing that adds a branch or cuisine to the name ("Spice Garden - Indian Restaurant")
+    // names the same restaurant: equivalent, not a mismatch to fix.
+    const semantic = field === 'website' ? Boolean(urlKey(w) === urlKey(g) || (final(w) && final(w) === final(g)))
+      : Boolean(key(websiteFact) && key(websiteFact) === key(gf[0])) || (field === 'name' && nameSimilarity(w, g) >= 0.9);
     const result = finish(check, w === g, semantic);
     if (field === 'name' && websiteFact.confidence === 'low') { result.verdict = 'unverifiable'; result.reason = 'Restaurant name inferred from page title; visible branding needs verification'; }
     checks.push(result);

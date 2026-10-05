@@ -21,39 +21,40 @@ const STREET_WORDS: Record<string, string> = {
 const ADDRESS_FILLER = new Set(['uk', 'gb', 'usa', 'us', 'united', 'kingdom', 'states', 'england', 'scotland', 'wales', 'ireland', 'northern', 'britain', 'great']);
 const POSTCODE = /\b(?:[a-z]{1,2}\d[a-z\d]?\s*\d[a-z]{2}|\d{5}(?:\s*\d{4})?)\b/;
 
-interface AddressParts { number: string | null; postcode: string | null; words: string[] }
+interface AddressParts { numbers: string[]; postcode: string | null; words: string[] }
 function addressParts(value: string): AddressParts | null {
   const key = textKey(value);
   if (!key) return null;
   const postcode = key.match(POSTCODE)?.[0]?.replace(/\s+/g, '') ?? null;
   const rest = postcode ? key.replace(POSTCODE, ' ') : key;
   const tokens = rest.split(/\s+/).filter(Boolean);
-  // The building number is the first bare number; a later one is a floor or unit.
-  const number = tokens.find(token => /^\d+[a-z]?$/.test(token)) ?? null;
+  // Every bare number: the building, a unit or floor, or both ends of a range ("12-14").
+  const numbers = tokens.filter(token => /^\d+[a-z]?$/.test(token));
   const words = tokens
-    .filter(token => token !== number && !/^\d+[a-z]?$/.test(token))
+    .filter(token => !/^\d+[a-z]?$/.test(token))
     .map(token => STREET_WORDS[token] ?? token)
     .filter(token => !ADDRESS_FILLER.has(token));
-  return { number, postcode, words };
+  return { numbers, postcode, words };
 }
 
 /**
  * Google's formattedAddress inserts the town and country a website omits ("100 High St, SE1 2AB"
  * against "100 High St, Norwood, London SE1 2AB, UK"), so the two are compared by word rather
- * than as one contiguous string. A differing postcode or building number still decides against a
- * match outright, keeping 1 High St distinct from 11 High St and one branch distinct from another.
+ * than as one contiguous string. A differing postcode decides against a match outright, and so do
+ * building numbers that share nothing: 1 High St stays distinct from 11 High St, while
+ * "Unit 3, 45 Market St" and "12-14 High St" still match "45 Market St" and "14 High St".
  */
 export function addressMatch(left: string, right: string): boolean {
   const a = addressParts(left), b = addressParts(right);
   if (!a || !b) return false;
   if (a.postcode && b.postcode && a.postcode !== b.postcode) return false;
-  if (a.number && b.number && a.number !== b.number) return false;
+  if (a.numbers.length && b.numbers.length && !a.numbers.some(number => b.numbers.includes(number))) return false;
   const smaller = a.words.length <= b.words.length ? a : b, larger = smaller === a ? b : a;
   const shared = smaller.words.filter(word => larger.words.includes(word));
   // The shorter address must be fully accounted for, or share enough of the street to be the same one.
   const consistent = (smaller.words.length > 0 && shared.length === smaller.words.length) || shared.length >= 2;
   if (a.postcode && b.postcode) return consistent;
-  if (a.number && b.number) return consistent;
+  if (a.numbers.length && b.numbers.length) return consistent;
   return false;
 }
 export function urlKey(value: string): string | null {

@@ -29,7 +29,12 @@ export async function auditSiteHours(
   const resolution = await resolvePlace(input.site, input.hints, extraction.identity, lookup);
   const notes = [...resolution.notes];
 
-  const place = resolution.place;
+  let place = resolution.place;
+  // Serper's Maps data sometimes omits a listing's hours; the Places API has them when a key exists.
+  if (place && lookup && !place.regularOpeningHours?.periods.length) {
+    const detailed = await lookup.details(place.placeId).catch(() => null);
+    if (detailed?.regularOpeningHours?.periods.length) place = { ...place, regularOpeningHours: detailed.regularOpeningHours, businessStatus: place.businessStatus ?? detailed.businessStatus, utcOffsetMinutes: place.utcOffsetMinutes ?? detailed.utcOffsetMinutes };
+  }
   const record = (status: HoursComparisonStatus, extra: Partial<HoursComparisonRecord> = {}): HoursComparisonRecord => ({
     site: input.site,
     siteKey: input.siteKey,

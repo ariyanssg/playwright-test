@@ -48,8 +48,10 @@ export async function harvestHours(page: Page, url: string, timeoutMs: number): 
         holder.__seo404Harvest = { length: text.length, since: now };
         return false;
       }
-      return document.readyState === 'complete' && now - holder.__seo404Harvest.since >= stableMs;
-    }, { stableMs: 400 }, { timeout: Math.min(1_500, Math.max(250, Math.floor(timeoutMs / 4))), polling: 100 }).catch(() => undefined);
+      // An empty or untitled page is usually a client-side app that has not rendered yet: an
+      // empty body never counts as settled, and an untitled one must hold still for longer.
+      return document.readyState === 'complete' && text.trim().length > 0 && now - holder.__seo404Harvest.since >= (document.title ? stableMs : stableMs * 4);
+    }, { stableMs: 400 }, { timeout: Math.min(4_000, Math.max(250, Math.floor(timeoutMs / 3))), polling: 100 }).catch(() => undefined);
     let evaluateError: string | null = null;
     const content = await page.evaluate(({ selector, maxScripts, maxJsonBytes, maxBlocks, maxBlockChars, maxBodyChars }) => {
       const jsonLd: string[] = [];
@@ -81,7 +83,8 @@ export async function harvestHours(page: Page, url: string, timeoutMs: number): 
         }))
         .filter((spec) => spec.days.length);
 
-      const dayHint = /\b(?:mon|tue|wed|thu|fri|sat|sun|daily|every ?day)/i;
+      // Whole day words only: "Sundae", "Satay", "Fries" and "Monte" are menu items, not hours.
+      const dayHint = /\b(?:mon(?:day)?|tues?(?:day)?|wed(?:nesday)?|thu(?:rs?)?(?:day)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?)s?\b|\bdaily\b|\bevery ?day\b/i;
       const matched = Array.from(document.querySelectorAll(selector)).filter((element) => {
         const text = (element instanceof HTMLElement ? element.innerText : element.textContent) || '';
         return text.trim().length > 0 && text.length < maxBlockChars && dayHint.test(text);

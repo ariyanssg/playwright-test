@@ -25,6 +25,10 @@ const PRICE = /[$£€]\s*\d/;
 const CLOSED = /\bclosed\b/i;
 const ALWAYS_OPEN = /\bopen\s*24\s*h(?:ou)?rs?\b|\b24\s*\/\s*7\b|\b24\s*hours\s*a\s*day\b/i;
 const MAX_RANGES_PER_LINE = 3;
+/** "Open", "Opening hours:", "Kitchen hours:" and "We're open" introduce hours without changing them. */
+const LEAD_IN = /^\s*(?:(?:our\s+)?(?:opening\s+|kitchen\s+|restaurant\s+)?(?:hours|times)|open(?:ing)?|we(?:'|\u2019)?re\s+open|we\s+are\s+open)\s*:?\s+/i;
+/** A second day group after a time on the same line ("Mon-Fri 12-10pm Sat-Sun 11-11pm") starts a new line. */
+const NEXT_GROUP = new RegExp(`(\\d(?:\\s*(?:a\\.?m\\.?|p\\.?m\\.?))?|closed)\\s*,?\\s+(?=${DAY_SPEC}\\b\\s*[:.\u2013\u2014-]?\\s*(?:\\d|closed\\b|noon\\b))`, 'gi');
 
 /**
  * Best-effort reading of human-written hours. Deliberately conservative: a line
@@ -43,7 +47,7 @@ export function parseTextHours(blocks: readonly string[]): HoursCandidate | null
         pendingDays = null;
         continue;
       }
-      const match = DAY_LINE.exec(line);
+      const match = DAY_LINE.exec(line) ?? (LEAD_IN.test(line) ? DAY_LINE.exec(line.replace(LEAD_IN, '')) : null);
       let days: DayIndex[] | null = null;
       let rest = line;
       const lone = match?.[1] ? LONE_ABBREVIATION.test(match[1].trim()) : false;
@@ -97,7 +101,8 @@ export function parseTextHours(blocks: readonly string[]): HoursCandidate | null
 function splitLines(block: string): string[] {
   return block
     .split(/[\n\r•|;]+/)
-    .map((line) => line.replace(/\s+/g, ' ').trim())
+    .flatMap((line) => line.replace(/\s+/g, ' ').trim().replace(NEXT_GROUP, '$1\n').split('\n'))
+    .map((line) => line.trim())
     .filter(Boolean);
 }
 

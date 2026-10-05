@@ -49,7 +49,7 @@ export function extractPageHours(harvest: HoursHarvest, url: string, score: numb
     score,
     candidate,
     alternateMethods: found.filter((item) => item !== candidate).map((item) => item.method),
-    identity: parseJsonLdIdentity(harvest.jsonLd) ?? identityFromTitle(harvest.title),
+    identity: structuredIdentity(harvest.jsonLd) ?? identityFromTitle(harvest.title, url),
     title: harvest.title,
   };
 }
@@ -80,7 +80,8 @@ export function chooseWebsiteHours(pages: readonly PageExtraction[], pageErrors:
     sourceUrl: best?.url ?? null,
     raw: best?.candidate?.raw ?? [],
     alternateMethods: best?.alternateMethods ?? [],
-    identity: pages.find((page) => page.identity)?.identity ?? null,
+    // Structured data on any page beats a name guessed from the first page's title.
+    identity: pages.find((page) => page.identity && page.identity.source !== 'title')?.identity ?? pages.find((page) => page.identity)?.identity ?? null,
     pagesInspected: pages.length,
     pagesWithHours: withHours.length,
     pageErrors: [...pageErrors],
@@ -93,11 +94,24 @@ function bestOf(candidates: readonly HoursCandidate[]): HoursCandidate | null {
   ), null);
 }
 
-/** Last resort when a site publishes no structured identity at all. */
-function identityFromTitle(title: string): SiteIdentity | null {
-  const name = title
-    .split(/[|–—]|(?: - )/)
-    .map((part) => part.trim())
-    .find((part) => part.length > 2 && !/^(?:home|official site|welcome|restaurant website)$/i.test(part));
-  return name ? { name, address: null, telephone: null } : null;
+function structuredIdentity(scripts: readonly string[]): SiteIdentity | null {
+  const identity = parseJsonLdIdentity(scripts);
+  return identity ? { ...identity, source: 'structured' } : null;
+}
+
+const GENERIC_TITLE = /^(?:home(?:\s*page)?|official site|welcome|restaurant website|menu|contact(?: us)?|about(?: us)?)$/i;
+
+/**
+ * Last resort when a site publishes no structured identity at all. Titles mix the brand with a
+ * slogan ("Best Indian in Soho | Spice Garden"), so the segment that resembles the site's own
+ * domain is the name; without one, the first segment that is not a generic page word is used.
+ */
+function identityFromTitle(title: string, url: string): SiteIdentity | null {
+  const parts = title.split(/[|–—·:]|(?: - )/).map((part) => part.trim()).filter((part) => part.length > 2 && !GENERIC_TITLE.test(part));
+  let label = '';
+  try { label = new URL(url).hostname.replace(/^www\./, '').split('.')[0]!.replace(/[^a-z0-9]/gi, '').toLowerCase(); } catch { /* No host to compare with. */ }
+  const compact = (part: string) => part.toLowerCase().replace(/[^a-z0-9]/g, '');
+  const byDomain = label.length > 2 ? parts.find((part) => { const key = compact(part); return key.length > 2 && (label.includes(key) || key.includes(label)); }) : undefined;
+  const name = byDomain ?? parts[0];
+  return name ? { name, address: null, telephone: null, source: 'title' } : null;
 }

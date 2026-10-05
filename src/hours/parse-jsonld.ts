@@ -132,14 +132,30 @@ function applySpecification(spec: unknown, intervals: OpenInterval[], stated: Se
   const opensText = text(node['opens']);
   const closesText = text(node['closes']);
   raw.push(`${days.map((day) => DAY_NAMES[day]).join('/')} ${opensText ?? '?'}-${closesText ?? '?'}`);
-  for (const day of days) stated.add(day);
-
+  // A day only counts as stated when its times can be read: missing or unreadable times leave it
+  // unknown, because treating them as "closed" reports a closure the site never published.
   if (!opensText || !closesText) return;
-  if (opensText.startsWith(CLOSED_ALL_DAY) && closesText.startsWith(CLOSED_ALL_DAY)) return;
-  const opens = parseClockTime(opensText);
-  const closes = parseClockTime(closesText);
+  const opens = parseSchemaTime(opensText);
+  const closes = parseSchemaTime(closesText);
   if (opens === null || closes === null) return;
+  for (const day of days) stated.add(day);
+  if (opensText.startsWith(CLOSED_ALL_DAY) && closesText.startsWith(CLOSED_ALL_DAY)) return;
   for (const day of days) intervals.push(intervalFromDayTimes(day, opens, closes));
+}
+
+/**
+ * schema.org asks for `HH:MM[:SS]`, but sites publish `17:00:00+01:00`, `17:00Z`, `5:00 PM`, `5pm`
+ * and `17.00` too. Each is the same wall-clock time, so all are read; anything else is unknown.
+ */
+export function parseSchemaTime(value: string): number | null {
+  const cleaned = String(value ?? '').trim().replace(/(?:z|[+-]\d{2}:?\d{2})$/i, '').replace(/^(\d{1,2})\.(\d{2})/, '$1:$2');
+  const meridiem = /^(\d{1,2})(?::(\d{2}))?(?::\d{2})?\s*([ap])\.?\s*m\.?$/i.exec(cleaned);
+  if (meridiem) {
+    const hour = Number(meridiem[1]), minute = Number(meridiem[2] ?? 0);
+    if (hour < 1 || hour > 12 || minute > 59) return null;
+    return ((hour % 12) + (meridiem[3]!.toLowerCase() === 'p' ? 12 : 0)) * 60 + minute;
+  }
+  return parseClockTime(cleaned);
 }
 
 function businessNodes(scripts: readonly string[]): Record<string, unknown>[] {

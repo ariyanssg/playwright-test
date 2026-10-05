@@ -2,6 +2,7 @@ import type { PlaceMatch, PlaceMatchConfidence } from '../types.js';
 import { siteKey } from '../urls.js';
 import { fetchPlaceDetails, searchPlaces } from './places.js';
 import type { SiteIdentity } from './model.js';
+import { addressMatch } from '../profile/normalize.js';
 
 /** Below this token-set overlap an unverified name match is not worth reporting. */
 export const NAME_SIMILARITY_FLOOR = 0.6;
@@ -58,18 +59,38 @@ export async function resolvePlace(
 
   let places = await lookup.search(buildQuery(name, address));
   if (!places.length && address) places = await lookup.search(name);
+  let verified = verifyPlaces(site, places);
+  // A listing found by name that does not link back can still be found by the domain itself:
+  // Google Maps matches a search for "dishoom.com" against each listing's website.
+  if (!verified.length) {
+    try {
+      const byDomain = await lookup.search(siteKey(site));
+      verified = verifyPlaces(site, byDomain);
+      for (const place of byDomain) if (!places.some((known) => known.placeId === place.placeId)) places.push(place);
+    } catch { /* The name search already answered; a failed extra search changes nothing. */ }
+  }
   if (!places.length) {
     notes.push(`Google returned no listing for "${name}"`);
     return { place: null, confidence: 'none', notes, searched: true };
   }
 
-  const verified = verifyPlaces(site, places);
+  // Several listings on one domain are a multi-location brand: the branch address picks one.
+  if (verified.length > 1 && address) {
+    const branch = verified.filter((place) => place.formattedAddress && addressMatch(place.formattedAddress, address));
+    if (branch.length === 1) return { place: branch[0]!, confidence: 'verified', notes, searched: true };
+  }
   if (verified.length === 1) return { place: verified[0]!, confidence: 'verified', notes, searched: true };
   if (verified.length > 1) {
-    notes.push(`${verified.length} Google listings point at this domain, which usually means multiple locations; supply a place_id column to pick one`);
+    notes.push(`${verified.length} Google listings point at this domain, which usually means multiple locations; ${address ? 'none matched the branch address exactly, so ' : ''}supply the branch address or a place_id column to pick one`);
     return { place: null, confidence: 'ambiguous', notes, searched: true };
   }
 
+  // No listing links back to the site. One whose address matches the branch is still this restaurant.
+  const atAddress = address ? places.filter((place) => place.formattedAddress && addressMatch(place.formattedAddress, address) && nameSimilarity(place.displayName, name) >= NAME_SIMILARITY_FLOOR) : [];
+  if (atAddress.length === 1) {
+    notes.push(`Matched "${atAddress[0]!.displayName}" by name and street address; its Google listing does not link to this website`);
+    return { place: atAddress[0]!, confidence: 'verified', notes, searched: true };
+  }
   const top = places[0]!;
   const similarity = nameSimilarity(top.displayName, name);
   if (similarity < NAME_SIMILARITY_FLOOR) {
@@ -102,13 +123,25 @@ export function verifyPlaces(site: string, places: readonly PlaceMatch[]): Place
   });
 }
 
+/** Words that say what kind of place it is, not which one: they never make two names alike. */
+const GENERIC_WORDS = new Set(['the', 'and', 'restaurant', 'restaurants', 'bar', 'cafe', 'kitchen', 'grill', 'ltd', 'limited', 'co', 'of', 'at', 'by', 'in']);
+
+/**
+ * Token-set overlap, where one name contained in the other also counts: Google lists a branch as
+ * "Dishoom Covent Garden" or "Spice Garden - Indian Restaurant" while the site says "Dishoom" or
+ * "Spice Garden". Containment needs a distinctive word, so "The Restaurant" matches nothing.
+ */
 export function nameSimilarity(left: string, right: string): number {
   const a = tokenize(left);
   const b = tokenize(right);
   if (!a.size || !b.size) return 0;
   let shared = 0;
   for (const token of a) if (b.has(token)) shared += 1;
-  return shared / (a.size + b.size - shared);
+  const jaccard = shared / (a.size + b.size - shared);
+  const [smaller, larger] = a.size <= b.size ? [a, b] : [b, a];
+  const distinctive = [...smaller].filter((token) => !GENERIC_WORDS.has(token));
+  const contained = distinctive.length > 0 && [...smaller].every((token) => larger.has(token));
+  return contained ? Math.max(jaccard, 0.9) : jaccard;
 }
 
 function tokenize(value: string): Set<string> {

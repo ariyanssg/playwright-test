@@ -17,6 +17,8 @@ export interface SiteIdentity {
   name: string | null;
   address: string | null;
   telephone: string | null;
+  /** Where the name came from: structured data is trusted over a page title. */
+  source?: 'structured' | 'title';
 }
 
 /** Raw microdata harvested from the page; interpretation happens in `parse-microdata.ts`. */

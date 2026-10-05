@@ -3,12 +3,13 @@ import robotsParser from 'robots-parser';
 import { startPublicProxy } from '../hosted/network.js';
 import { AUDITOR_USER_AGENT } from '../robots.js';
 import { harvestHours, type HoursHarvest } from '../hours/harvest.js';
-import { parseJsonLdHours, stripJsonNoise } from '../hours/parse-jsonld.js';
+import { parseJsonLdHours, parseSchemaTime, stripJsonNoise } from '../hours/parse-jsonld.js';
 import { parseMicrodataHours } from '../hours/parse-microdata.js';
 import { parseTextHours } from '../hours/parse-text.js';
-import { parseClockTime } from '../hours/schedule.js';
 import { emptySnapshot, fact, first, SERVICES, validateHttpUrl, type ProfileTarget, type WebsiteSnapshot, type ServiceLink, type LinkCheck, type Service } from './model.js';
 import { addressMatch, sameHost, textKey, phone } from './normalize.js';
+import { nameSimilarity, NAME_SIMILARITY_FLOOR } from '../hours/match.js';
+import { findPhoneNumbersInText, type CountryCode } from 'libphonenumber-js/max';
 
 export const servicePattern: Record<Service, RegExp> = {
   website: /website/i,
@@ -17,6 +18,10 @@ export const servicePattern: Record<Service, RegExp> = {
   ordering: /\b(?:order(?:ing)?(?: online| now)?|takeaway|takeout|delivery|click.{0,5}collect)\b/i,
 };
 export interface PageContent { title: string; body: string; names: string[]; addresses: string[]; phones: Array<{raw:string;value:string}>; links: Array<{url:string;label:string}>; headings: string[]; forms: string[]; frames: Array<{url:string;title:string}> }
+/** schema.org types that describe a place that serves food or drink. */
+const BUSINESS_TYPE = /restaurant|foodestablishment|localbusiness|cafeorcoffeeshop|coffeeshop|barorpub|bakery|icecreamshop|brewery|winery|distillery|nightclub|foodservice/i;
+/** A UK postcode at the end of a short line is almost always a printed address (footers, contact pages). */
+const POSTCODE_LINE = /^[^\n]{0,110}\b[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}\b\.?$/;
 /** How each service's destination is named in reasons shown to the user. */
 const SERVICE_PAGE: Record<Service, string> = { website: 'the website', menu: 'a menu page', reservations: 'a booking page', ordering: 'an online ordering page' };
 
@@ -53,7 +58,7 @@ export class ProfileBrowser {
   private browser?: Browser;
   private context?: BrowserContext;
   private proxy?: Awaited<ReturnType<typeof startPublicProxy>>;
-  private robots = new Map<string, { allowed: (url: string) => boolean; delay: number; sitemaps: string[] }>();
+  private robots = new Map<string, { allowed: (url: string) => boolean; delay: number; sitemaps: string[]; reason?: string }>();
   private checked = new Map<string, Promise<LinkCheck>>();
   private lastStart = new Map<string, Promise<number>>();
   private abort?: () => void;
@@ -75,30 +80,41 @@ export class ProfileBrowser {
     await this.context.route('**/*', async route => {
       const r = route.request();
       let hops = 0; for (let prev = r.redirectedFrom(); prev; prev = prev.redirectedFrom()) hops++;
-      if (!['GET', 'HEAD', 'OPTIONS'].includes(r.method()) || ['media', 'font'].includes(r.resourceType()) || hops > 10) await route.abort();
+      // Only text is read, so images, video and fonts are never downloaded.
+      if (!['GET', 'HEAD', 'OPTIONS'].includes(r.method()) || ['image', 'media', 'font'].includes(r.resourceType()) || hops > 10) await route.abort();
       else await route.continue();
     });
     this.abort = () => { void (this.browser ?? this.context)?.close().catch(() => {}); };
     this.options.signal?.addEventListener('abort', this.abort, { once: true });
     return this.context;
   }
-  private async policy(url: string): Promise<{ allowed: (url: string) => boolean; delay: number; sitemaps: string[] }> {
+  /**
+   * robots.txt per RFC 9309: a 4xx answer (Cloudflare and WAFs often send 403 to automated
+   * clients) means there are no rules, so everything is allowed; a 5xx answer or no answer means
+   * the site may be down, so nothing is fetched and the reason says so.
+   */
+  private async policy(url: string): Promise<{ allowed: (url: string) => boolean; delay: number; sitemaps: string[]; reason?: string }> {
     const origin = new URL(url).origin, cached = this.robots.get(origin); if (cached) return cached;
     const context = await this.init();
-    const response = await context.request.get(`${origin}/robots.txt`, { timeout: this.options.timeoutMs, maxRedirects: 10 });
-    let policy;
-    if ([404, 410].includes(response.status())) policy = { allowed: () => true, delay: this.options.hostDelayMs, sitemaps: [] };
-    else if (!response.ok()) policy = { allowed: () => false, delay: 0, sitemaps: [] };
-    else {
-      const parsed = (robotsParser as unknown as (url: string, content: string) => { isAllowed: (url: string, agent: string) => boolean | undefined; getCrawlDelay: (agent: string) => number | undefined; getSitemaps: () => string[] })(`${origin}/robots.txt`, (await response.text()).slice(0, 500000));
-      policy = { allowed: (u: string) => parsed.isAllowed(u, AUDITOR_USER_AGENT) !== false, delay: Math.max(this.options.hostDelayMs, (parsed.getCrawlDelay(AUDITOR_USER_AGENT) || 0) * 1000), sitemaps: parsed.getSitemaps() };
+    let policy: { allowed: (url: string) => boolean; delay: number; sitemaps: string[]; reason?: string };
+    try {
+      const response = await context.request.get(`${origin}/robots.txt`, { timeout: Math.min(8_000, this.options.timeoutMs), maxRedirects: 10 });
+      if (response.status() >= 400 && response.status() < 500) policy = { allowed: () => true, delay: this.options.hostDelayMs, sitemaps: [] };
+      else if (!response.ok()) policy = { allowed: () => false, delay: 0, sitemaps: [], reason: `robots.txt answered HTTP ${response.status()}, so the site was not read` };
+      else {
+        const parsed = (robotsParser as unknown as (url: string, content: string) => { isAllowed: (url: string, agent: string) => boolean | undefined; getCrawlDelay: (agent: string) => number | undefined; getSitemaps: () => string[] })(`${origin}/robots.txt`, (await response.text()).slice(0, 500000));
+        policy = { allowed: (u: string) => parsed.isAllowed(u, AUDITOR_USER_AGENT) !== false, delay: Math.max(this.options.hostDelayMs, (parsed.getCrawlDelay(AUDITOR_USER_AGENT) || 0) * 1000), sitemaps: parsed.getSitemaps(), reason: 'Blocked by robots.txt' };
+      }
+      await response.dispose();
+    } catch (error) {
+      policy = { allowed: () => false, delay: 0, sitemaps: [], reason: `robots.txt could not be fetched (${error instanceof Error ? error.message.split('\n')[0] : String(error)}), so the site was not read` };
     }
-    await response.dispose(); this.robots.set(origin, policy); return policy;
+    this.robots.set(origin, policy); return policy;
   }
   private async page(url: string): Promise<Page> {
     validateHttpUrl(url); const context = await this.init();
     const policy = await this.policy(url);
-    if (!policy.allowed(url)) throw new Error('Blocked by robots.txt or robots unavailable');
+    if (!policy.allowed(url)) throw new Error(policy.reason || 'Blocked by robots.txt');
     const page = await context.newPage();
     await this.pace(new URL(url).host, Math.min(policy.delay, 30000)); return page;
   }
@@ -171,6 +187,7 @@ export class ProfileBrowser {
       }
     }
     if (queue.some(i => !seen.has(i.url.replace(/#.*$/, '')))) { incomplete = true; out.warnings.push('Website discovery page budget reached'); }
+    preferMarkedUp(out);
     out.links = out.links.filter((l, i, all) => all.findIndex(x => x.service === l.service && x.url === l.url) === i);
     for (const field of ['name', 'phone', 'website', 'hours', 'special_hours', ...SERVICES.map(s => `services.${s}`)]) {
       if (out.coverage[field]?.state === 'present') continue;
@@ -311,12 +328,20 @@ export function mergeWebsitePages(target: ProfileTarget, pages: ReadonlyArray<{ 
     for (const warning of page.snapshot.warnings) if (!out.warnings.includes(warning)) out.warnings.push(warning);
     for (const [field, entry] of Object.entries(page.snapshot.coverage)) if (entry.state === 'present') out.coverage[field] = entry;
   }
+  preferMarkedUp(out);
   out.links = out.links.filter((l, i, all) => all.findIndex(x => x.service === l.service && x.url === l.url) === i);
   for (const field of ['name', 'phone', 'website', 'hours', 'special_hours', ...SERVICES.map(s => `services.${s}`)]) {
     if (out.coverage[field]?.state === 'present') continue;
     out.coverage[field] = { state: incomplete ? 'partial' : 'not_found', reason: `${incomplete ? 'Incomplete discovery' : 'Not found'} across ${out.pages.length} rendered pages; scope: linked service/contact pages to depth 2` };
   }
   return out;
+}
+
+/** A phone or address read from plain text is a fallback: once any page marks one up, it goes. */
+function preferMarkedUp(out: WebsiteSnapshot): void {
+  for (const field of ['phone', 'address']) {
+    if (out.facts.some(f => f.field === field && f.confidence !== 'low')) out.facts = out.facts.filter(f => f.field !== field || f.confidence !== 'low');
+  }
 }
 
 async function readContent(page: Page): Promise<PageContent> {
@@ -346,19 +371,21 @@ export function extract(out: WebsiteSnapshot, harvest: HoursHarvest, content: Pa
       for (let count = 0; queue.length && count < 2000; count++) {
         const value = queue.shift(); if (!value || typeof value !== 'object') continue;
         if (Array.isArray(value)) { queue.push(...value); continue; }
-        if (/restaurant|foodestablishment|localbusiness|cafeorcoffeeshop/i.test([value['@type']].flat().join(' '))) nodes.push(value);
+        if (BUSINESS_TYPE.test([value['@type']].flat().join(' '))) nodes.push(value);
         queue.push(...Object.values(value).filter(v => v && typeof v === 'object'));
       }
     } catch { if (!out.warnings.some(w => w.startsWith('Invalid JSON-LD'))) out.warnings.push(`Invalid JSON-LD on ${url} (structured data on this site could not be parsed)`); }
   }
-  const selected = nodes.filter(n => !target.name || !n.name || textKey(n.name) === textKey(target.name));
+  // A supplied name picks this restaurant's node out of a multi-brand page; "Spice Garden" still
+  // selects a node named "Spice Garden Restaurant".
+  const selected = nodes.filter(n => !target.name || typeof n.name !== 'string' || nameSimilarity(n.name, target.name) >= NAME_SIMILARITY_FLOOR);
   for (const node of selected) {
     for (const [field, value] of Object.entries({ name: node.name, phone: node.telephone, website: node.url, address: typeof node.address === 'string' ? node.address : node.address ? [node.address.streetAddress, node.address.addressLocality, node.address.postalCode].filter(Boolean).join(', ') : null })) if (typeof value === 'string') fact(out, field, value, url, `JSON-LD ${field}`);
     for (const value of [node.hasMenu || node.menu].flat()) if (typeof value === 'string') { try { out.links.push({ service: 'menu', url: new URL(value, url).href, label: 'Structured menu', source: 'website' }); } catch {} }
     const exceptions: Record<string, Array<{start:number;end:number}>> = {};
     for (const spec of [node.specialOpeningHoursSpecification || []].flat()) {
       if (!spec?.validFrom || !/^\d{4}-\d{2}-\d{2}$/.test(spec.validFrom)) continue;
-      const open = parseClockTime(spec.opens), close = parseClockTime(spec.closes);
+      const open = parseSchemaTime(spec.opens), close = parseSchemaTime(spec.closes);
       if (open === null || close === null) continue;
       const start = Date.parse(spec.validFrom), end = Date.parse(spec.validThrough || spec.validFrom);
       for (let date = start; date <= end && date - start < 366 * 86400000; date += 86400000) {
@@ -373,13 +400,23 @@ export function extract(out: WebsiteSnapshot, harvest: HoursHarvest, content: Pa
   // A page heading is only identity evidence when it resembles the supplied restaurant name.
   if (!out.facts.some(f => f.field === 'name') && target.name && content.headings.some(h => textKey(h) === textKey(target.name!))) fact(out, 'name', content.headings.find(h => textKey(h) === textKey(target.name!))!, url, 'visible heading');
   for (const address of content.addresses) fact(out, 'address', address, url, 'address element', address, 'medium');
+  // Many sites print the address as plain footer text. A line ending in a postcode is read as
+  // branch evidence only when no marked-up address exists, so it never competes with one.
+  if (!content.addresses.length && !out.facts.some(f => f.field === 'address')) {
+    for (const line of content.body.split('\n').map(l => l.replace(/\s+/g, ' ').trim()).filter(l => POSTCODE_LINE.test(l)).slice(0, 2)) fact(out, 'address', line, url, 'visible text with postcode', line, 'low');
+  }
   for (const p of content.phones) fact(out, 'phone', phone(p.raw) ? p.raw : p.value, url, 'tel: anchor', p.raw || p.value, 'medium');
+  // Without a tap-to-call link, the first valid number printed on the page is the phone.
+  if (!content.phones.length && !out.facts.some(f => f.field === 'phone')) {
+    const printed = findPhoneNumbersInText(content.body.slice(0, 20000), 'GB' as CountryCode)[0];
+    if (printed) fact(out, 'phone', String(printed.number.number), url, 'visible text', content.body.slice(printed.startsAt, printed.endsAt), 'low');
+  }
   const validNodes = selected.map(node => ({ ...node, openingHoursSpecification: [node.openingHoursSpecification || []].flat().filter(spec => {
-    const valid = spec && parseClockTime(spec.opens) !== null && parseClockTime(spec.closes) !== null;
+    const valid = spec && parseSchemaTime(spec.opens) !== null && parseSchemaTime(spec.closes) !== null;
     if (!valid) out.warnings.push(`Invalid structured hours on ${url}; incomplete times are not treated as closed`);
     return valid;
   }) }));
-  const validMicrodata = { ...harvest.microdata, specs: harvest.microdata.specs.filter(s => parseClockTime(s.opens) !== null && parseClockTime(s.closes) !== null) };
+  const validMicrodata = { ...harvest.microdata, specs: harvest.microdata.specs.filter(s => parseSchemaTime(s.opens) !== null && parseSchemaTime(s.closes) !== null) };
   // Within one page the most structured layer wins outright, as in the hours comparison: a
   // footer read as text next to exact JSON-LD is not a second opinion, and treating the two as
   // rival sources raised "website disagrees with itself" conflicts that were only parse noise.
