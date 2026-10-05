@@ -230,7 +230,7 @@ test('Google settings validate while exact imports and explicit legacy sources k
   assert.deepEqual(mergeScanOptions({ urls: ['https://example.com/a'] }).discovery, ['import']);
   assert.deepEqual(mergeScanOptions({ sites: ['https://example.com'], discovery: ['sitemap'] }).discovery, ['sitemap']);
   assert.throws(() => mergeScanOptions({ googleCountry: 'bad' }), /country/);
-  assert.throws(() => mergeScanOptions({ googleMaxPages: 0 }), /budget/);
+  assert.throws(() => mergeScanOptions({ googleMaxPages: 0 }), /Google result pages per site/);
   assert.throws(() => mergeScanOptions({ googleProvider: 'unknown' as never }), /provider/);
 });
 

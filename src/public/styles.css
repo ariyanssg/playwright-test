@@ -450,7 +450,9 @@ input:user-invalid, .invalid { border-color: var(--red) !important; }
 .task-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin: 0; padding: 0; border: 0; min-width: 0; }
 .task-card { position: relative; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--sp-3); align-content: start; padding: 14px 40px 14px 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--paper); cursor: pointer; transition: border-color .15s, box-shadow .15s, background-color .15s; }
 .task-card:hover { border-color: var(--line-strong); }
-.task-card input { position: absolute; opacity: 0; pointer-events: none; }
+/* The invisible checkbox covers the whole card, so a click anywhere lands on the control itself. */
+.task-card input { position: absolute; inset: 0; z-index: 1; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
+.task-card input:disabled { cursor: not-allowed; }
 .task-card:has(input:checked) { border-color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); }
 .task-card:has(input:checked) .task-icon { background: var(--ink); color: var(--paper); }
 .task-card:has(input:focus-visible) { outline: 2px solid var(--focus); outline-offset: 2px; }
@@ -1041,6 +1043,11 @@ tbody tr.row-warn td:first-child { box-shadow: inset 3px 0 0 var(--heat); }
 }
 @media (max-width: 420px) {
   .tally > div, .metrics > div { padding: var(--sp-3) 14px; }
+  /* The narrowest phones keep the top bar to icons so it never pushes the page sideways. */
+  .utility-actions .button.mobile-only span { display: none; }
+  .utility-actions .button.mobile-only { padding: 0 10px; }
+  .utility-bar { gap: var(--sp-2); }
+  .utility-left { flex: 1 1 auto; overflow: hidden; }
   .table-pagination { justify-content: center; }
   .audit-brief .docket { grid-template-columns: minmax(0, 1fr); }
   .audit-brief .launch { grid-column: 1; grid-row: 3; width: 100%; }
