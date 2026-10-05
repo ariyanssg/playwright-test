@@ -18,6 +18,7 @@ export async function loadConnections(applyProviderStatus) {
     { name: 'Google Business Profile', description: 'Cross-check the profile you manage, including menu, reservation and ordering links.', symbol: 'store', available: providers?.gbpAuthenticated, connectGbp: providers?.gbpConfigured && !providers.gbpAuthenticated, note: providers?.gbpConfigured ? 'Credentials found · connect the Google account that manages the restaurant' : 'Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET, then connect' },
   ];
   if (globalThis.SIGNAL404_HOSTED) {
+    for (const item of definitions) if (typeof item.note === 'string') item.note = item.note.replace(/^Set (\w+)/, 'Add $1 to the Netlify environment');
     const builtIn = definitions[0]; builtIn.description = 'Imports, sitemaps and a rendered site crawl, run online.'; builtIn.note = 'Online crawl cap: 500 pages per site · files and history stay in this browser';
     const places = definitions.find((item) => item.check); if (places) places.check = false;
     definitions[1].badge = providers?.searchApi ? 'API ready' : providers ? 'Key required' : 'Unavailable';
@@ -27,14 +28,23 @@ export async function loadConnections(applyProviderStatus) {
     if (backlinks) backlinks.note = providers?.dataForSeo ? 'Online cap: 2,000 rows per site · billed by the provider' : 'Add DATAFORSEO_LOGIN and DATAFORSEO_PASSWORD to the Netlify environment';
   }
   $('#provider-cards').innerHTML = definitions.map((provider) => `<article class="surface provider-card"><div class="provider-top"><span class="provider-icon">${icon(provider.symbol)}</span><span class="provider-status ${provider.available ? 'connected' : ''}">${provider.badge || (provider.available ? 'Connected' : provider.available == null ? 'Unavailable' : provider.connect ? 'Ready to connect' : 'Not connected')}</span></div><h2>${provider.name}</h2><p>${provider.description}</p><div class="provider-footer">${provider.connect ? '<a class="button primary compact" href="/api/auth/google/start">Connect Google</a>' : provider.connectGbp ? '<a class="button primary compact" href="/api/auth/gbp/start">Connect Business Profile</a>' : `<small>${provider.note}</small>`}${provider.check ? '<button type="button" class="button secondary compact" data-check-places>Test key</button>' : ''}</div><p class="provider-result" data-provider-result hidden></p></article>`).join('');
+  // Source cards keep their cost label and add whether the source is ready, so a source that
+  // cannot run is visible before the audit starts rather than as a note afterwards.
   for (const provider of definitions.filter((provider) => provider.source && !(globalThis.SIGNAL404_HOSTED && provider.source === 'gsc'))) {
-    const tag = $(`input[value="${provider.source}"]`).closest('.source-card').querySelector('.source-tag');
-    tag.textContent = provider.available ? 'Connected' : provider.available == null ? 'Unavailable' : 'Optional';
-    tag.classList.toggle('optional', !provider.available);
+    const input = $(`input[value="${provider.source}"]`);
+    const tag = input.closest('.source-card').querySelector('.source-tag');
+    tag.dataset.cost ||= tag.textContent;
+    tag.textContent = provider.available ? `${tag.dataset.cost} · ready` : provider.available == null ? 'Status unknown' : 'Not set up';
+    tag.classList.toggle('ready', Boolean(provider.available));
+    tag.classList.toggle('missing', provider.available === false || provider.available === undefined);
+    input.closest('.source-card').title = provider.available ? '' : provider.note;
   }
+  // Search Console needs the desktop version, so the hosted sidebar does not advertise it.
+  $('#google-status').classList.toggle('hidden', Boolean(globalThis.SIGNAL404_HOSTED));
   $('#google-status').innerHTML = `<span class="connection-light ${google?.authenticated ? '' : 'muted'}"></span><span><b>Search Console</b><small>${google?.authenticated ? 'Connected' : google ? 'Not connected · optional' : 'Status unavailable'}</small></span>${icon('arrow')}`;
   const hoursSource = providers?.serper || providers?.googleMaps;
-  $('#check-hours').disabled = !hoursSource;
+  // The setup form owns the toggle's state; it only needs to know whether hours can run here.
+  $('#check-hours').dataset.unavailable = String(!hoursSource);
   $('#google-provider-note').textContent = providers?.serper ? `Auto will use Serper (one credit per results page)${providers?.searchApi ? ', then SearchApi,' : ''} with a visible browser fallback if it fails.` : providers?.searchApi ? 'Auto will use SearchApi (provider credits), with a visible browser fallback if it fails. Serper is a cheaper API: set SERPER_API_KEY.' : 'Auto will open a local Google browser. No API key is needed. Resolve any Google prompt there, then choose Continue in the audit.';
   // Optional chaining: a page cached from an older release may not have every provider option.
   const option = (value) => $(`#google-provider option[value="${value}"]`);
@@ -42,7 +52,7 @@ export async function loadConnections(applyProviderStatus) {
   if (option('searchapi')) option('searchapi').disabled = !providers?.searchApi && !globalThis.SIGNAL404_HOSTED;
   if (globalThis.SIGNAL404_HOSTED) $('#google-provider-note').textContent = providers?.searchApi ? `Hosted Google discovery uses ${providers?.serper ? 'Serper' : 'SearchApi'}. Search credits and Netlify usage limits apply; keep the tab open to continue scanning.` : 'Add SERPER_API_KEY (cheapest) or SEARCHAPI_API_KEY to the Netlify environment to enable Google discovery. Exact URL imports do not need a search key.';
   if (!hoursSource) $('#check-hours').checked = false;
-  $('#check-hours-note').textContent = providers?.serper ? 'Google Maps hours via Serper · about 3 credits per restaurant' : providers?.googleMaps ? 'Google Places is connected · billed per request' : 'Set SERPER_API_KEY or GOOGLE_MAPS_API_KEY to enable';
+  $('#check-hours').dataset.note = providers?.serper ? 'Via Serper · about 3 credits per restaurant' : providers?.googleMaps ? 'Via Google Places · billed per request' : `Needs SERPER_API_KEY or GOOGLE_MAPS_API_KEY in ${globalThis.SIGNAL404_HOSTED ? 'Netlify' : '.env'}`;
   $('#inspect-google').disabled = !google?.authenticated;
   if (!google?.authenticated) $('#inspect-google').checked = false;
   $('#inspect-google').closest('label').querySelector('small').textContent = google?.authenticated ? 'Uses URL Inspection quota only after live verification' : 'Connect Search Console to enable URL Inspection';

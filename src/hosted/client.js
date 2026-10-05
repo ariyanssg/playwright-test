@@ -1,5 +1,5 @@
 import { normalizeUrl } from '../urls.ts';
-import { selectHoursPages } from '../hours/pages.ts';
+import { linkCandidates, selectHoursPages } from '../hours/pages.ts';
 const ACTIVE = ['queued', 'discovering', 'scanning', 'comparing_hours', 'comparing_profile', 'reporting'];
 /** Sources that run online. Search Console needs a stored OAuth token, so it stays desktop-only. */
 const HOSTED_SOURCES = ['import', 'google', 'serper', 'searchapi', 'sitemap', 'crawl', 'backlinks'];
@@ -191,7 +191,10 @@ async function checkAll(scan, gaps) {
   const skips = new Map();
   let next = 0;
   await Promise.all(Array.from({ length: Math.max(1, Math.min(parallelism(scan), batches.length)) }, async () => {
-    for (let batch = batches[next++]; batch; batch = batches[next++]) {
+    // The cursor only advances onto a real batch, so a batch requeued after another worker
+    // finished is still picked up by whoever is left.
+    while (next < batches.length) {
+      const batch = batches[next++];
       if (await checkCancelled(scan)) return;
       const origins = [...new Set(batch.map((candidate) => new URL(candidate.normalizedUrl).origin))];
       let reply;
@@ -218,9 +221,13 @@ async function checkAll(scan, gaps) {
   }));
 }
 
-/** Restaurant identity hints from every imported row of a site, as the desktop edition reads them. */
-function placeHints(all, site) {
+/** Restaurant identity hints: branch details typed in the form, then every imported row of the site. */
+function placeHints(all, site, targets = []) {
   const hints = {};
+  for (const target of targets) {
+    try { if (host(target.url) !== host(site)) continue; } catch { continue; }
+    hints.name ||= target.name; hints.address ||= target.address; hints.placeId ||= target.placeId;
+  }
   for (const candidate of all) {
     if (host(candidate.site) !== host(site)) continue;
     for (const source of candidate.sources) {
@@ -245,7 +252,14 @@ async function compareHours(scan, gaps) {
     const work = scan.hoursWork[site] ||= { pages: [], pageErrors: [], completed: [] };
     let record;
     try {
-      let items = selectHoursPages(site, all, scan.options.hoursPageLimit || 5).filter((url) => !work.completed.includes(url)).map((url, rank, list) => ({ url, score: list.length - rank }));
+      const limit = scan.options.hoursPageLimit || 5;
+      let ranked = selectHoursPages(site, all, limit);
+      // Nothing discovered beyond the homepage (an hours-only audit): rank the homepage's links.
+      if (ranked.length < 2 && limit > 1 && !work.completed.length) {
+        const home = await remote({ action: 'crawl-page', site, url: normalize(site) }).catch(() => ({ links: [] }));
+        ranked = selectHoursPages(site, [...all, ...linkCandidates(site, home.links || [])], limit);
+      }
+      let items = ranked.filter((url) => !work.completed.includes(url)).map((url, rank, list) => ({ url, score: list.length - rank }));
       for (let round = 0; items.length && round <= MAX_SKIPS; round++) {
         const reply = await remote({ action: 'hours-pages', items });
         work.pages.push(...reply.pages); work.pageErrors.push(...reply.errors);
@@ -254,7 +268,7 @@ async function compareHours(scan, gaps) {
         await persist(scan);
       }
       for (const item of items) work.pageErrors.push(`${item.url}: the page took too long to load online`);
-      record = await remote({ action: 'hours-compare', site, pages: work.pages, pageErrors: work.pageErrors, hints: placeHints(all, site), toleranceMinutes: scan.options.hoursToleranceMinutes || 15, requireVerifiedPlace: scan.options.hoursRequireVerifiedPlace, country: scan.options.googleCountry });
+      record = await remote({ action: 'hours-compare', site, pages: work.pages, pageErrors: work.pageErrors, hints: placeHints(all, site, scan.options.profileTargets), toleranceMinutes: scan.options.hoursToleranceMinutes || 15, requireVerifiedPlace: scan.options.hoursRequireVerifiedPlace, country: scan.options.googleCountry });
     } catch (error) { record = notChecked(site, `Not checked: ${error.message}. Resume the audit to retry.`); }
     if (record.status === 'not_checked') gaps.hours++;
     scan.hours = [...scan.hours.filter((h) => host(h.site) !== host(site)), record];
@@ -449,6 +463,8 @@ export async function hostedRequest(path, options = {}) {
     opts.crawlLimit = Math.min(500, Math.max(1, Number(opts.crawlLimit) || 200));
     opts.backlinkLimit = Math.min(2_000, Math.max(1, Number(opts.backlinkLimit) || 1_000));
     opts.profilePageLimit = Math.min(12, Math.max(1, Number(opts.profilePageLimit) || 8));
+    // One worker step reads at most six hours pages.
+    opts.hoursPageLimit = Math.min(6, Math.max(1, Number(opts.hoursPageLimit) || 5));
     opts.profileMode = 'public';
     if (opts.googleProvider === 'browser' || opts.inspectGoogle) throw new Error('Local Google browser and Search Console inspection are available in the desktop version. Choose an API provider for hosted discovery.');
     if (!Number.isInteger(opts.googleMaxPages) || opts.googleMaxPages < 1 || opts.googleMaxPages > 100) throw new Error('Use a Google page budget between 1 and 100 online.');
@@ -478,7 +494,10 @@ export async function hostedRequest(path, options = {}) {
       const latest = await get('scans', id);
       if (latest.status === 'completed' && !latest.options.checkProfile) return;
       // Google values are never stored, so a finished profile comparison is refreshed from scratch.
-      const refresh = latest.options.checkProfile && ['completed', 'completed_partial'].includes(latest.status) ? { profileWork: {} } : {};
+      // Only a fully completed audit is refreshed from scratch; a partial one keeps the saved
+      // progress of restaurants that failed, and compareProfiles re-reads finished ones whose
+      // live Google values are gone.
+      const refresh = latest.options.checkProfile && latest.status === 'completed' ? { profileWork: {} } : {};
       await updateScan(id, { cancelRequested: false, status: 'queued', error: null, ...refresh }); transientErrors.delete(id); void run(id);
     });
     return { ok: true };

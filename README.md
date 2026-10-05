@@ -157,7 +157,7 @@ The tool prefers matching domain properties (`sc-domain:example.com`), then the 
 1. Google Maps data via Serper when `SERPER_API_KEY` is set (3 credits per restaurant).
 2. Google Places API (New) when `GOOGLE_MAPS_API_KEY` is set, used if Serper fails or has no key.
 
-The branch is verified by street address and postcode before anything is compared. If no source can be read, the report says why (for example a rejected key) instead of listing every row as unresolved. Google values are shown live only and are not written to saved reports; **Refresh profile audit** fetches them again. Menu and ordering links are not published in Google's listing data, so those rows stay unresolved in this mode.
+The branch is verified before anything is compared: by street address and postcode (unit numbers and ranges such as "12-14 High St" are tolerated), by phone number plus website, or, when no address is published, by a single listing that links to the site and carries its name. A chain with several matching listings stays **ambiguous** until a branch address or Place ID picks one. Plain-text footer addresses with a postcode and printed phone numbers are read when a site marks up neither. If no source can be read, the report says why (for example a rejected key) instead of listing every row as unresolved. Google values are shown live only and are not written to saved reports; **Refresh profile audit** fetches them again. Menu and ordering links are not published in Google's listing data, so those rows stay unresolved in this mode.
 
 ### Google Business Profile (profile you manage)
 
@@ -209,9 +209,9 @@ curl -s -X POST http://127.0.0.1:4173/api/providers/places/check
 | `--hours-pages <n>` | 5 | Pages read per site when looking for hours |
 | `--hours-require-verified-place` | off | Skip any site whose Google listing cannot be verified |
 
-**Matching a restaurant to its listing.** A `place_id` column wins outright. Otherwise the restaurant's name and address come from the input file or from the site's own JSON-LD, a Text Search is issued, and a returned listing counts as **verified** only when its `websiteUri` host matches the site's. Several listings pointing at one domain are reported as **ambiguous** rather than guessed at, and a name-only match is reported as **unverified** and flagged in the workbook, the CSV, the notes, and the run warnings.
+**Matching a restaurant to its listing.** A `place_id` column wins outright. Otherwise the restaurant's name and address come from the form's branch details, the input file, or the site's own JSON-LD (a page title is only a fallback, and the title segment that resembles the domain is preferred over a slogan). A search is issued, and a returned listing counts as **verified** when its `websiteUri` host matches the site's, or when it sits at the branch's street address under a matching name. If no listing links back, a second search by the domain itself is tried. Branch names that contain the site's name ("Dishoom Covent Garden" for "Dishoom") match. Several listings pointing at one domain are narrowed down by the branch address and otherwise reported as **ambiguous** rather than guessed at, and a name-only match is reported as **unverified** and flagged in the workbook, the CSV, the notes, and the run warnings.
 
-**Reading hours from the website.** Three layers, in confidence order: schema.org JSON-LD (`openingHoursSpecification` and the legacy `openingHours` shorthand, including several day groups in one value such as `Mo-Sa 11:00-23:00 Su 12:00-22:00`), microdata, then visible page text. The text reader accepts UK dotted times (`11.30am`), reads bare 12-hour ranges the way a restaurant means them (`11-10` is 11 AM to 10 PM), keeps a day whose line also mentions a closed break, and ignores ordinary words that look like day abbreviations ("We are open…"). The highest-ranked page is read first; when it already publishes a complete structured week the remaining pages are skipped, otherwise they load in parallel. The highest-confidence layer that produced anything wins outright - layers are never merged, because combining a partial specification with text guesses would invent hours that appear in neither source. A day is only compared when the source actually says something about it, so a site listing Monday to Friday is reported as `partial`, never as closed at the weekend.
+**Reading hours from the website.** Three layers, in confidence order: schema.org JSON-LD (`openingHoursSpecification` and the legacy `openingHours` shorthand, including several day groups in one value such as `Mo-Sa 11:00-23:00 Su 12:00-22:00`), microdata, then visible page text. The text reader accepts UK dotted times (`11.30am`), reads bare 12-hour ranges the way a restaurant means them (`11-10` is 11 AM to 10 PM), keeps a day whose line also mentions a closed break, reads lines introduced by "Open" or "Opening hours:", splits several day groups written on one line, and ignores ordinary words that look like day abbreviations ("We are open…", "Sundae", "Satay"). JSON-LD times written as `17:00:00+01:00`, `5:00 PM` or `17.00` are read too; a day whose times cannot be read is left unknown rather than reported as closed. The highest-ranked page is read first; when it already publishes a complete structured week the remaining pages are skipped, otherwise they load in parallel. The highest-confidence layer that produced anything wins outright - layers are never merged, because combining a partial specification with text guesses would invent hours that appear in neither source. A day is only compared when the source actually says something about it, so a site listing Monday to Friday is reported as `partial`, never as closed at the weekend.
 
 **Comparing.** Both sides are local wall-clock times at the restaurant, so no timezone conversion happens; `utcOffsetMinutes` is recorded as context only. The comparison handles closes after midnight, split lunch and dinner shifts, closed days, and around-the-clock listings. Tolerance applies to each boundary independently.
 
@@ -267,10 +267,27 @@ Publishing `dist` instead produces a root-page 404 because the dashboard's
 
 The hosted edition uses browser IndexedDB for audits, candidates, Google search
 observations, checkpoints, and hours records. Stateless Netlify Functions run
-one step per request (a Google result page, a sitemap read, one crawled page,
-one rendered URL check, one profile page, one link check), and the dashboard
-drives the steps, several at once. Chromium is bundled for the Linux serverless
-runtime; no separate server or paid database is needed.
+one step per request, and the dashboard drives the steps, up to four at once.
+Chromium is bundled for the Linux serverless runtime; no separate server or paid
+database is needed.
+
+How the online engine stays fast and finishes:
+
+- **Warm browser.** Each function instance keeps one Chromium running between
+  calls and opens a fresh context per call, so only the first call on a new
+  instance pays the launch cost.
+- **Batched steps within a time budget.** A call checks up to 8 URLs, reads up
+  to 6 hours pages, 4 profile pages or 4 service links, three at a time, inside
+  a 48-second budget (Netlify stops synchronous functions at 60 seconds). Work
+  that does not fit is handed back and queued again, so a slow website costs
+  another call rather than a failed audit.
+- **Retries.** Busy (HTTP 429), timed-out and restarted workers are retried with
+  backoff; a refused request (HTTP 400) is not. Calls in flight are capped at
+  four per tab.
+- **Failures stay local.** A dead domain becomes that page's `network_error`
+  result; a restaurant whose Google listing cannot be read gets a `not_checked`
+  hours record or a profile note. The audit then finishes as **partial** and
+  names what is missing, and **Retry what's missing** reruns only that.
 
 Online, an audit can use exact imports (TXT/CSV/XLSX/XLSM, no row cap), Google
 results (Serper, or SearchApi), sitemaps, a rendered site crawl (up to 500
@@ -291,8 +308,7 @@ browsers, devices, or Netlify preview origins have separate histories. Clearing
 site data removes audits; export reports to keep a durable copy. Browser storage
 quota errors stop the run instead of silently dropping progress.
 
-Online rendering has a 12-second navigation timeout and checks one URL at a time
-to fit function limits. Public-network validation and a DNS-pinning proxy protect
+Online rendering has a 12-second navigation timeout per page. Public-network validation and a DNS-pinning proxy protect
 every browser connection, including redirects and subresources. Worker requests
 are rate-limited. API credentials remain in Netlify, not in browser storage.
 Free hosting is subject to Netlify credits/limits; Serper, SearchApi and Google Places
@@ -313,20 +329,36 @@ contain API keys. Run `npm run build` for the original desktop build, or
 `npm run build:netlify` for the hosted edition. Deploy both `dist/public` and the
 configured `netlify/functions` directory; deploying assets alone is insufficient.
 
-The dashboard is a local, dependency-free ES module application. Its five routes
-separate the overview, audit setup, findings, history, and optional connections.
-An audit can be bookmarked with `/#audit-workspace?run=<scan-id>`; browser back
-and forward preserve the current form and result filters.
+The dashboard is a local, dependency-free ES module application. Its routes
+separate the overview, audit setup, an open audit, the list of audits, and
+optional connections. An audit can be bookmarked with
+`/#audit-workspace?run=<scan-id>`, and `/#new-audit?task=pages|profile|hours`
+opens the setup on one check; browser back and forward preserve the current form
+and result filters.
+
+A new audit starts with **what to check**: broken pages, the business profile,
+opening hours, or several. Only the steps and settings those checks need are
+shown, profile and hours audits skip page discovery, and branch details (street
+address, name, Place ID) apply to both comparisons. Errors appear beside the
+Start button, which stays pinned to the bottom of the screen on narrow layouts.
+
+An open audit leads with its progress (one bar, the current step in plain words,
+and the stages), then one tab per check that ran: **Broken pages**, **Business
+profile**, **Opening hours** (a day-by-day comparison per restaurant), and
+**Notes** (coverage gaps and provider messages, errors first). Each tab shows how
+many items need attention, and the audit opens on the first tab with something
+to fix.
 
 - `src/public/app.js` composes the features and coordinates refreshes.
 - `src/public/modules/api.js` owns HTTP requests and transport errors.
 - `src/public/modules/router.js` owns hash routing, focus, and mobile navigation.
 - `src/public/modules/workspace.js` owns history, overview totals, and activity.
 - `src/public/modules/setup.js` owns input, presets, upload, validation, and submission.
-- `src/public/modules/audit.js` owns scan selection, SSE/polling, results, and evidence.
+- `src/public/modules/audit.js` owns scan selection, SSE/polling, tabs, results, and evidence.
+- `src/public/modules/profile.js` and `src/public/modules/hours.js` render the business profile and opening hours comparisons.
 - `src/public/modules/connections.js` owns provider readiness and optional features.
 - `src/public/modules/ui.js` contains shared formatting and feedback primitives.
-- `src/public/styles.css` holds the whole design system in one file (no import chain), with light and dark themes.
+- `src/public/styles.css` holds the whole design system in one file (no import chain), with light and dark themes. Colours, type sizes, spacing, radii, control heights and layers are tokens in `:root`; components use only those.
 - `src/public/fonts/` bundles Archivo and Martian Mono (SIL OFL), so the dashboard makes no third-party font requests.
 
 Search and outcome filtering run in SQLite before results are paginated into

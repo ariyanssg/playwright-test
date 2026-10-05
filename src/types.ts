@@ -185,6 +185,8 @@ export interface ScanSummary {
   sourceCounts: Partial<Record<DiscoverySource, number>>;
   backlinkCount: number;
   hoursCounts: Partial<Record<HoursComparisonStatus, number>>;
+  /** One record per restaurant, so the dashboard can show the comparison, not only a count. */
+  hours: HoursComparisonRecord[];
   artifacts: string[];
   googleDiscovery: GoogleDiscoveryState[];
   profiles?: import('./profile/model.js').ProfileReport[];

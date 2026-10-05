@@ -73,7 +73,7 @@ test('CLI enforces configuration errors and fail-on exit codes while keeping sec
 
     const badConcurrency = await runCli(['scan', '--url', `${fixture.origin}/ok`, '--concurrency', '0'], environment);
     assert.equal(badConcurrency.code, 1);
-    assert.match(badConcurrency.stderr, /concurrency must be a positive integer/);
+    assert.match(badConcurrency.stderr, /Pages at once \(concurrency\) must be a whole number of 1 or more/);
 
     const served = await runServeUntilReady(environment);
     assert.equal(served.code, 0);

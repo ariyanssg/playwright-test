@@ -1,5 +1,5 @@
 import { $, $$, escapeHtml as e, statusLabel, targetLabel } from './ui.js';
-const views = { overview: 'Overview', 'new-audit': 'New audit', 'audit-workspace': 'Findings', 'run-history': 'Audit history', connections: 'Connections' };
+const views = { overview: 'Overview', 'new-audit': 'New audit', 'audit-workspace': 'Audit', 'run-history': 'Audits', connections: 'Connections' };
 export function initRouter(onNavigate, listAudits = () => []) {
   const sidebar = $('#sidebar');
   const mobile = matchMedia('(max-width: 760px)');
@@ -41,10 +41,26 @@ export function initRouter(onNavigate, listAudits = () => []) {
       link.classList.toggle('active', selected);
       if (selected) link.setAttribute('aria-current', 'page'); else link.removeAttribute('aria-current');
     });
-    $('#current-view-name').textContent = views[view];
-    document.title = `${views[view]} · Signal404`;
-    if (focus) { $(`#${view} h1`).focus({ preventScroll: true }); window.scrollTo(0, 0); }
-    onNavigate(view, new URLSearchParams(query).get('run'));
+    current.view = view;
+    paintLocation();
+    if (focus) { ($$(`#${view} h1`).find((heading) => heading.offsetParent) ?? $(`#${view} h1`)).focus({ preventScroll: true }); window.scrollTo(0, 0); }
+    const params = new URLSearchParams(query);
+    onNavigate(view, params.get('run'), params);
+  }
+  // The open audit is named in the breadcrumb, the sidebar and the tab title, so it is always
+  // clear which audit the page shows and one click gets back to it from anywhere.
+  const current = { view: 'overview', id: null, label: '' };
+  function paintLocation() {
+    const onAudit = current.view === 'audit-workspace';
+    const name = onAudit && current.label ? current.label : views[current.view];
+    $('#current-view-name').textContent = name;
+    $('#crumb-parent').classList.toggle('hidden', !onAudit);
+    $('#crumb-parent-slash').classList.toggle('hidden', !onAudit);
+    document.title = `${name} · Signal404`;
+    const link = $('#nav-current');
+    link.href = current.id ? `#audit-workspace?run=${encodeURIComponent(current.id)}` : '#audit-workspace';
+    link.classList.toggle('empty', !current.id);
+    $('#nav-current-name').textContent = current.label || 'None open';
   }
   window.addEventListener('hashchange', () => render(true));
   initCommandPalette();
@@ -56,9 +72,11 @@ export function initRouter(onNavigate, listAudits = () => []) {
     if (!dialog || !input || !list || dialog.dataset.ready) return;
     dialog.dataset.ready = 'true';
     const pages = [
-      { title: 'New audit', hint: 'Set targets and start', run() { location.hash = '#new-audit'; } },
-      { title: 'Findings', hint: 'The audit you opened last', run() { location.hash = '#audit-workspace'; } },
-      { title: 'Audit history', hint: 'Every saved audit', run() { location.hash = '#run-history'; } },
+      { title: 'New audit: broken pages', hint: 'Find 404 and soft-404 pages', run() { location.hash = '#new-audit?task=pages'; } },
+      { title: 'New audit: business profile', hint: 'Compare the website with Google', run() { location.hash = '#new-audit?task=profile'; } },
+      { title: 'New audit: opening hours', hint: 'Compare hours with Google', run() { location.hash = '#new-audit?task=hours'; } },
+      { title: 'Open audit', hint: 'The audit you opened last', run() { location.hash = current.id ? `#audit-workspace?run=${encodeURIComponent(current.id)}` : '#audit-workspace'; } },
+      { title: 'All audits', hint: 'Every saved audit', run() { location.hash = '#run-history'; } },
       { title: 'Connections', hint: 'Data sources and keys', run() { location.hash = '#connections'; } },
       { title: 'Overview', hint: 'Latest audits', run() { location.hash = '#overview'; } },
     ];
@@ -80,6 +98,7 @@ export function initRouter(onNavigate, listAudits = () => []) {
     document.addEventListener('keydown', (event) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); if (dialog.open) dialog.close(); else open(); }
     });
+    if (/Mac|iPhone|iPad/i.test(navigator.platform || navigator.userAgent)) $('#command-key').textContent = '⌘K';
     const searchBtn = $('#global-search');
     if (searchBtn) searchBtn.addEventListener('click', open);
     input.addEventListener('input', filterItems);
@@ -96,5 +115,9 @@ export function initRouter(onNavigate, listAudits = () => []) {
     dialog.addEventListener('click', (event) => { if (event.target === dialog) dialog.close(); });
     paint();
   }
-  return { go(view, run) { const hash = `#${view}${run ? `?run=${encodeURIComponent(run)}` : ''}`; if (location.hash === hash) render(true); else location.hash = hash; } };
+  return {
+    go(view, run) { const hash = `#${view}${run ? `?run=${encodeURIComponent(run)}` : ''}`; if (location.hash === hash) render(true); else location.hash = hash; },
+    /** Names the open audit everywhere the page refers to it. */
+    setCurrent(id, label) { current.id = id; current.label = label || ''; paintLocation(); },
+  };
 }

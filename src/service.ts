@@ -14,7 +14,8 @@ import { auditSiteHours } from './hours/audit.js';
 import { HoursInspector } from './hours/inspector.js';
 import type { PlaceHints } from './hours/match.js';
 import { placeLookup } from './hours/places.js';
-import { selectHoursPages } from './hours/pages.js';
+import { htmlLinks, linkCandidates, selectHoursPages } from './hours/pages.js';
+import { AUDITOR_USER_AGENT } from './robots.js';
 import { holdBrowser } from './browser.js';
 import { RobotsCache } from './robots.js';
 import { BrowserScanner } from './scanner.js';
@@ -136,6 +137,7 @@ export class ScanService {
       sourceCounts,
       backlinkCount: this.db.backlinkCount(scanId),
       hoursCounts: this.db.hoursStatusCounts(scanId),
+      hours: this.db.listHours(scanId),
       artifacts,
       googleDiscovery: this.db.googleDiscovery(scanId),
       profiles: this.profiles(scanId),
@@ -377,8 +379,8 @@ export class ScanService {
           const record = await auditSiteHours({
             site,
             siteKey: key,
-            pages: selectHoursPages(site, candidates, options.hoursPageLimit),
-            hints: collectPlaceHints(candidates, key),
+            pages: await hoursPages(site, candidates, options.hoursPageLimit),
+            hints: collectPlaceHints(candidates, key, options.profileTargets),
             toleranceMinutes: options.hoursToleranceMinutes,
             requireVerifiedPlace: options.hoursRequireVerifiedPlace,
           }, inspector, lookup);
@@ -503,9 +505,13 @@ export class ScanService {
   }
 }
 
-/** Pulls operator-supplied place hints out of the discovery evidence for one site. */
-function collectPlaceHints(candidates: readonly CandidateRecord[], key: string): PlaceHints {
+/** Operator-supplied place hints for one site: branch details typed in the form, then import columns. */
+function collectPlaceHints(candidates: readonly CandidateRecord[], key: string, targets: ScanOptions['profileTargets'] = []): PlaceHints {
   const hints: PlaceHints = {};
+  for (const target of targets) {
+    try { if (siteKey(target.url) !== key) continue; } catch { continue; }
+    hints.name ??= target.name; hints.address ??= target.address; hints.placeId ??= target.placeId;
+  }
   for (const candidate of candidates) {
     let candidateKey: string;
     try {
@@ -526,4 +532,18 @@ function collectPlaceHints(candidates: readonly CandidateRecord[], key: string):
 function makeScanId(): string {
   const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
   return `${stamp}-${randomUUID().slice(0, 8)}`;
+}
+
+/**
+ * The pages most likely to publish a site's hours. When the audit discovered nothing beyond the
+ * homepage (an hours-only audit), the homepage's own links are ranked instead.
+ */
+async function hoursPages(site: string, candidates: CandidateRecord[], limit: number): Promise<string[]> {
+  const pages = selectHoursPages(site, candidates, limit);
+  if (pages.length > 1 || limit < 2) return pages;
+  try {
+    const response = await fetch(site, { headers: { 'user-agent': AUDITOR_USER_AGENT }, signal: AbortSignal.timeout(10_000), redirect: 'follow' });
+    if (!response.ok || !/html/i.test(response.headers.get('content-type') || '')) return pages;
+    return selectHoursPages(site, [...candidates, ...linkCandidates(site, htmlLinks(await response.text(), response.url || site))], limit);
+  } catch { return pages; }
 }

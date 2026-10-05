@@ -294,7 +294,9 @@ export class ScanDatabase {
   queryResults(scanId: string, offset: number, limit: number, classification?: string, search = ''): { total: number; items: CandidateRecord[] } {
     const clauses = ['scan_id = ?', 'result_json IS NOT NULL'];
     const params: Array<string | number> = [scanId];
-    if (classification && classification !== 'all') {
+    // "problems" is the dashboard's "Broken only" filter: the three outcomes counted as broken.
+    if (classification === 'problems') clauses.push("json_extract(result_json, '$.classification') IN ('hard_404', 'gone_410', 'soft_404_suspected')");
+    else if (classification && classification !== 'all') {
       clauses.push("json_extract(result_json, '$.classification') = ?");
       params.push(classification);
     }

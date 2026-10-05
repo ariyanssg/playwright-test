@@ -71,3 +71,26 @@ function scorePath(rawPath: string, candidate: CandidateRecord): number | null {
   const evidence = candidate.sources.some((source) => EVIDENCE_HINT.test(`${source.title ?? ''} ${source.anchor ?? ''}`));
   return evidence ? score + EVIDENCE_BONUS : score;
 }
+
+/**
+ * Same-site links read from a homepage, shaped as candidates so `selectHoursPages` can rank them.
+ * An hours-only audit discovers no pages of its own; this finds its /hours or /contact page.
+ */
+export function linkCandidates(site: string, links: readonly string[]): CandidateRecord[] {
+  const host = siteKey(site);
+  return links.flatMap((link) => {
+    const url = tryNormalizeUrl(link);
+    if (!url) return [];
+    try { if (siteKey(url) !== host) return []; } catch { return []; }
+    return [{ inputUrl: url, normalizedUrl: url, site, sources: [], status: 'pending', result: null } as unknown as CandidateRecord];
+  });
+}
+
+/** `href` values from raw HTML, resolved against the page; enough to rank a homepage's links. */
+export function htmlLinks(html: string, base: string): string[] {
+  const links: string[] = [];
+  for (const match of html.slice(0, 2_000_000).matchAll(/<a\b[^>]*?\bhref\s*=\s*["']([^"'#]+)/gi)) {
+    try { links.push(new URL(match[1]!.replace(/&amp;/g, '&'), base).href); } catch { /* Not a URL. */ }
+  }
+  return [...new Set(links)];
+}

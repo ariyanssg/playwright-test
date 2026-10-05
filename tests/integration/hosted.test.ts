@@ -200,7 +200,8 @@ test('hosted hours retry keeps website extraction and successful URL checks', as
     assert.match(partial.hours[0].notes[0], /Places access blocked.*Resume/);
     await api(page, `/api/scans/${scan.id}/resume`, { method: 'POST' }); const done = await waitForStatus(page, scan.id, 'completed');
     assert.equal(done.hoursCounts.match, 1);
-    assert.deepEqual(calls.filter((call) => call !== 'hours-compare'), ['check', 'hours-page'], 'website pages are read once and kept');
+    // The homepage's links are read once to find an hours page, since nothing else was discovered.
+    assert.deepEqual(calls.filter((call) => !['hours-compare', 'crawl-page'].includes(call)), ['check', 'hours-page'], 'website pages are read once and kept');
     assert.ok(calls.filter((call) => call === 'hours-compare').length >= 2);
   } finally { await env.close(); }
 });

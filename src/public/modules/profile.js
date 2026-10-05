@@ -85,12 +85,25 @@ function hostname(url) {
   try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return url; }
 }
 
-export function renderProfiles(reports, enabled) {
+/** Restaurants whose comparison found something to fix or could not finish. */
+export const profileIssues = (reports) => (reports || []).filter((report) => report.summary.outcome !== 'pass').length;
+
+export function renderProfiles(reports, enabled, running = false) {
   const root = $('#profile-results'); if (!root) return;
   root.classList.toggle('hidden', !enabled);
   if (!enabled) return;
   // Preserve which sections the reader has opened across live refreshes.
   const open = [...root.querySelectorAll('details')].map((details) => details.open);
-  const changed = setHtml(root, `<h2>Website vs. Google profile</h2>${reports?.length ? reports.map(card).join('') : '<p>Each restaurant appears here as soon as its profile has been compared.</p>'}`);
+  const problemsOnly = root.querySelector('#profile-problems')?.checked ?? false;
+  // Restaurants with something to fix come first.
+  const rank = { issues: 0, incomplete: 1, pass: 2 };
+  const sorted = [...(reports || [])].sort((a, b) => (rank[a.summary.outcome] ?? 1) - (rank[b.summary.outcome] ?? 1));
+  const toolbar = `<div class="profile-toolbar"><h2>Website vs. Google profile <span class="count-chip">${sorted.length}</span></h2><label><input type="checkbox" id="profile-problems" ${problemsOnly ? 'checked' : ''}>Show only items to fix</label></div>`;
+  const changed = setHtml(root, `${toolbar}${sorted.length ? sorted.map(card).join('') : `<div class="empty-panel"><b>${running ? 'The business profile is compared after the pages are checked' : 'No business profile was compared'}</b>${running ? 'Each restaurant appears here as soon as its profile has been compared.' : 'Resume the audit, or check the notes for the reason.'}</div>`}`);
+  root.classList.toggle('problems-only', problemsOnly);
   if (changed && open.length) root.querySelectorAll('details').forEach((details, index) => { if (index < open.length) details.open = open[index]; });
 }
+
+document.addEventListener('change', (event) => {
+  if (event.target.id === 'profile-problems') $('#profile-results').classList.toggle('problems-only', event.target.checked);
+});

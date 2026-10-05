@@ -73,20 +73,20 @@ export function mergeScanOptions(input: Partial<ScanOptions>): ScanOptions {
   merged.googleLanguage = String(merged.googleLanguage).toLowerCase();
   if (!/^[a-z]{2}$/.test(merged.googleCountry)) throw new Error('Google country must be a two-letter country code');
   if (!/^[a-z]{2,3}(?:-[a-z]{2,4})?$/.test(merged.googleLanguage)) throw new Error('Google language must be a language code such as en');
-  merged.googleMaxPages = positiveInteger(merged.googleMaxPages, 'Google page budget');
-  merged.concurrency = positiveInteger(merged.concurrency, 'concurrency');
-  merged.perHostConcurrency = positiveInteger(merged.perHostConcurrency, 'per-host concurrency');
-  merged.hostDelayMs = nonNegativeInteger(merged.hostDelayMs, 'host delay');
-  merged.crawlLimit = positiveInteger(merged.crawlLimit, 'crawl limit');
-  merged.timeoutMs = positiveInteger(merged.timeoutMs, 'timeout');
-  merged.gscDays = positiveInteger(merged.gscDays, 'GSC days');
-  merged.backlinkLimit = positiveInteger(merged.backlinkLimit, 'backlink limit');
-  merged.hoursToleranceMinutes = nonNegativeInteger(merged.hoursToleranceMinutes, 'hours tolerance');
-  merged.hoursPageLimit = positiveInteger(merged.hoursPageLimit, 'hours page limit');
+  merged.googleMaxPages = positiveInteger(merged.googleMaxPages, 'Google result pages per site (google-max-pages)');
+  merged.concurrency = positiveInteger(merged.concurrency, 'Pages at once (concurrency)');
+  merged.perHostConcurrency = positiveInteger(merged.perHostConcurrency, 'Pages at once per website (per-host)');
+  merged.hostDelayMs = nonNegativeInteger(merged.hostDelayMs, 'Pause per website (host-delay)');
+  merged.crawlLimit = positiveInteger(merged.crawlLimit, 'Crawl limit per site (crawl-limit)');
+  merged.timeoutMs = positiveInteger(merged.timeoutMs, 'Page timeout (timeout)');
+  merged.gscDays = positiveInteger(merged.gscDays, 'Search Console days');
+  merged.backlinkLimit = positiveInteger(merged.backlinkLimit, 'Backlinks per site (backlink-limit)');
+  merged.hoursToleranceMinutes = nonNegativeInteger(merged.hoursToleranceMinutes, 'Hours tolerance (hours-tolerance)');
+  merged.hoursPageLimit = positiveInteger(merged.hoursPageLimit, 'Pages read for hours (hours-pages)');
   if (typeof merged.checkProfile !== 'boolean') throw new Error('checkProfile must be a boolean');
   if (!['public', 'managed', 'imported'].includes(merged.profileMode)) throw new Error('Profile mode must be public, managed, or imported');
-  merged.profilePageLimit = positiveInteger(merged.profilePageLimit, 'profile page limit');
-  merged.profileHoursTolerance = nonNegativeInteger(merged.profileHoursTolerance, 'profile hours tolerance');
+  merged.profilePageLimit = positiveInteger(merged.profilePageLimit, 'Pages read for profile');
+  merged.profileHoursTolerance = nonNegativeInteger(merged.profileHoursTolerance, 'Profile hours tolerance');
   merged.profileEvidence = validateImports(merged.profileEvidence);
   if (!Array.isArray(merged.profileTargets)) throw new Error('profileTargets must be an array');
   for (const target of merged.profileTargets) {
@@ -102,11 +102,11 @@ export function mergeScanOptions(input: Partial<ScanOptions>): ScanOptions {
 }
 
 function positiveInteger(value: number, label: string): number {
-  if (!Number.isInteger(value) || value < 1) throw new Error(`${label} must be a positive integer`);
+  if (!Number.isInteger(value) || value < 1) throw new Error(`${label} must be a whole number of 1 or more`);
   return value;
 }
 
 function nonNegativeInteger(value: number, label: string): number {
-  if (!Number.isInteger(value) || value < 0) throw new Error(`${label} must be a non-negative integer`);
+  if (!Number.isInteger(value) || value < 0) throw new Error(`${label} must be a whole number of 0 or more`);
   return value;
 }

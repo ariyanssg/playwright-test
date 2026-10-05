@@ -5,7 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="description" content="Signal404 finds broken and soft-404 pages on restaurant websites and checks Google listings against what each site publishes.">
 <meta name="color-scheme" content="light dark">
-<meta name="theme-color" content="#23272c">
+<meta name="theme-color" content="#23272c" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0a0b0d" media="(prefers-color-scheme: dark)">
 <title>Signal404 — Restaurant site audits</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2323272c'/%3E%3Cpath d='M8 7h16v15l-2.7 2-2.6-2-2.7 2-2.7-2-2.6 2L8 22Z' fill='%23fbfbf8'/%3E%3Cpath d='M11.5 12h9M11.5 16h5' stroke='%23cc2936' stroke-width='2.2' stroke-linecap='round'/%3E%3C/svg%3E">
 <link rel="preload" href="/fonts/archivo.woff2" as="font" type="font/woff2" crossorigin>
@@ -40,7 +41,7 @@
   <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.3-5.6M20 4v5h-5"/></symbol>
   <symbol id="i-shield" viewBox="0 0 24 24"><path d="m12 3 7.5 3v5.5c0 4.6-3.2 7.8-7.5 9.5-4.3-1.7-7.5-4.9-7.5-9.5V6L12 3Z"/><path d="m9 12 2 2 4-4.5"/></symbol>
   <symbol id="i-store" viewBox="0 0 24 24"><path d="M4 9.5 5.5 4h13L20 9.5M4 9.5V20h16V9.5M4 9.5c0 1.5 1.3 2.5 2.7 2.5s2.6-1 2.6-2.5c0 1.5 1.2 2.5 2.7 2.5s2.7-1 2.7-2.5c0 1.5 1.2 2.5 2.6 2.5S20 11 20 9.5M9.5 20v-5h5v5"/></symbol>
-  <symbol id="i-spark" viewBox="0 0 24 24"><path d="M4 13h3.5l2-6 4 11 2-5H20"/></symbol>
+  <symbol id="i-note" viewBox="0 0 24 24"><path d="M5 4h14v11l-5 5H5V4Z"/><path d="M14 20v-5h5M8.5 9h7M8.5 12.5h4"/></symbol>
 </svg>
 <a class="skip-link" href="#main-content">Skip to main content</a>
 <div class="app-shell">
@@ -50,11 +51,11 @@
     <span class="brand-word">Signal<b>404</b></span>
   </a>
   <p class="brand-caption">Restaurant site audits</p>
+  <a class="sidebar-cta" href="#new-audit" data-view-link="new-audit"><svg aria-hidden="true"><use href="#i-plus"/></svg><span>New audit</span></a>
   <nav class="sidebar-nav" aria-label="Workspace">
     <a href="#overview" data-view-link="overview"><svg aria-hidden="true"><use href="#i-overview"/></svg><span>Overview</span></a>
-    <a href="#new-audit" data-view-link="new-audit"><svg aria-hidden="true"><use href="#i-plus"/></svg><span>New audit</span></a>
-    <a href="#audit-workspace" data-view-link="audit-workspace"><svg aria-hidden="true"><use href="#i-findings"/></svg><span>Findings</span></a>
-    <a href="#run-history" data-view-link="run-history"><svg aria-hidden="true"><use href="#i-history"/></svg><span>Audit history</span><span class="nav-count" id="nav-run-count">0</span></a>
+    <a href="#run-history" data-view-link="run-history"><svg aria-hidden="true"><use href="#i-history"/></svg><span>Audits</span><span class="nav-count" id="nav-run-count">0</span></a>
+    <a href="#audit-workspace" data-view-link="audit-workspace" id="nav-current" class="nav-current"><svg aria-hidden="true"><use href="#i-findings"/></svg><span class="nav-current-copy"><small>Open audit</small><span id="nav-current-name">None open</span></span></a>
     <a href="#connections" data-view-link="connections"><svg aria-hidden="true"><use href="#i-plug"/></svg><span>Connections</span></a>
   </nav>
   <div class="sidebar-bottom">
@@ -62,8 +63,8 @@
       <span class="connection-light muted"></span>
       <span><b>Search Console</b><small>Checking connection…</small></span>
     </a>
-    <p class="sidebar-note"><svg aria-hidden="true"><use href="#i-shield"/></svg><span>Audit history and reports are saved on this computer.</span></p>
-    <p class="edition">Local edition <span>v1.1</span></p>
+    <p class="sidebar-note"><svg aria-hidden="true"><use href="#i-shield"/></svg><span id="storage-note">Audit history and reports are saved on this computer.</span></p>
+    <p class="edition"><span id="edition-name">Local edition</span> <span>v1.2</span></p>
   </div>
 </aside>
 <button class="sidebar-backdrop hidden" id="sidebar-backdrop" type="button" aria-label="Close navigation" tabindex="-1"></button>
@@ -71,12 +72,12 @@
 <header class="utility-bar">
   <div class="utility-left">
     <button id="menu-toggle" class="icon-button mobile-only" type="button" aria-label="Open navigation" aria-controls="sidebar" aria-expanded="false"><svg aria-hidden="true"><use href="#i-menu"/></svg></button>
-    <nav class="breadcrumb" aria-label="Location"><span>Signal404</span><span class="breadcrumb-slash" aria-hidden="true">/</span><b id="current-view-name" aria-current="page">Overview</b></nav>
+    <nav class="breadcrumb" aria-label="Location"><a href="#overview">Signal404</a><span class="breadcrumb-slash" aria-hidden="true">/</span><a id="crumb-parent" href="#run-history" class="hidden">Audits</a><span id="crumb-parent-slash" class="breadcrumb-slash hidden" aria-hidden="true">/</span><b id="current-view-name" aria-current="page">Overview</b></nav>
   </div>
   <div class="utility-actions">
-    <button class="command-trigger" id="global-search" type="button" aria-label="Quick actions (Control or Command K)" title="Quick actions"><svg aria-hidden="true"><use href="#i-search"/></svg><span>Jump to…</span><kbd>⌘K</kbd></button>
-    <span class="local-badge"><span></span>Local engine</span>
-    <a class="button primary compact" href="#new-audit"><svg aria-hidden="true"><use href="#i-plus"/></svg><span>New audit</span></a>
+    <button class="command-trigger" id="global-search" type="button" aria-label="Quick actions (Control or Command K)" title="Quick actions"><svg aria-hidden="true"><use href="#i-search"/></svg><span>Jump to…</span><kbd id="command-key">Ctrl K</kbd></button>
+    <span class="local-badge" id="engine-badge"><span></span>Local engine</span>
+    <a class="button primary compact mobile-only" href="#new-audit"><svg aria-hidden="true"><use href="#i-plus"/></svg><span>New</span></a>
   </div>
 </header>
 <main id="main-content" class="dashboard-main" tabindex="-1">
@@ -91,13 +92,20 @@
     <div>
       <p class="eyebrow">Workspace · <span id="today-label"></span></p>
       <h1 id="overview-title" tabindex="-1">Overview</h1>
-      <p class="lede">Every audit lands here as a ticket. Open one to see which pages are broken and what Google is showing customers.</p>
+      <p class="lede">Pick a check to run, or open an audit from the rail.</p>
     </div>
-    <a class="button primary" href="#new-audit"><svg aria-hidden="true"><use href="#i-plus"/></svg><span>Start an audit</span></a>
   </div>
+  <section class="launcher" aria-labelledby="launch-title">
+    <h2 id="launch-title" class="section-label">Start an audit</h2>
+    <div class="launch-grid">
+      <a class="launch-card" href="#new-audit?task=pages"><span class="task-icon" aria-hidden="true"><svg><use href="#i-findings"/></svg></span><span><b>Find broken pages</b><small>404, gone and soft-404 pages that Google, a sitemap or a crawl turns up.</small></span><svg class="launch-arrow" aria-hidden="true"><use href="#i-arrow"/></svg></a>
+      <a class="launch-card" href="#new-audit?task=profile"><span class="task-icon" aria-hidden="true"><svg><use href="#i-store"/></svg></span><span><b>Check the business profile</b><small>Name, phone, hours, menu, booking and ordering links against Google.</small></span><svg class="launch-arrow" aria-hidden="true"><use href="#i-arrow"/></svg></a>
+      <a class="launch-card" href="#new-audit?task=hours"><span class="task-icon" aria-hidden="true"><svg><use href="#i-clock"/></svg></span><span><b>Check opening hours</b><small>The website’s weekly hours against the Google listing, day by day.</small></span><svg class="launch-arrow" aria-hidden="true"><use href="#i-arrow"/></svg></a>
+    </div>
+  </section>
   <section class="pass" aria-labelledby="pass-title">
     <header class="pass-head">
-      <h2 id="pass-title">Latest audits</h2>
+      <h2 id="pass-title" class="section-label">Latest audits</h2>
       <a class="text-link" href="#run-history">All audits<svg aria-hidden="true"><use href="#i-arrow"/></svg></a>
     </header>
     <div class="pass-rail" aria-hidden="true"></div>
@@ -110,213 +118,217 @@
   </section>
   <dl class="tally overview-metrics">
     <div><dt>Audits</dt><dd id="overview-audits">—</dd><small>Saved in this workspace</small></div>
-    <div><dt>Pages checked</dt><dd id="overview-checked">—</dd><small>Rendered in Chromium</small></div>
+    <div><dt>Pages checked</dt><dd id="overview-checked">—</dd><small>Rendered in a real browser</small></div>
     <div class="tally-alert"><dt>Broken pages</dt><dd id="overview-findings">—</dd><small>404, 410 and suspected soft 404</small></div>
     <div><dt>Running now</dt><dd id="overview-active">—</dd><small>Live audits</small></div>
   </dl>
-  <div class="overview-grid">
-    <section class="panel workflow" aria-labelledby="workflow-title">
-      <h2 id="workflow-title">How an audit runs</h2>
-      <ol class="steps">
-        <li><b>Collect URLs</b><p>From Google results, sitemaps, a site crawl, backlinks or a list you upload.</p></li>
-        <li><b>Render every page</b><p>A real Chromium visit records the status code, redirects and what the page actually says.</p></li>
-        <li><b>Compare with Google</b><p>Optionally checks opening hours, phone, website and service links against the Google listing.</p></li>
-        <li><b>Export the evidence</b><p>Excel, CSV and JSON reports with the reason behind every verdict.</p></li>
-      </ol>
-    </section>
-    <aside class="panel note-panel" aria-label="How to read results">
-      <h2>Reading the verdicts</h2>
-      <ul class="legend">
-        <li><span class="classification hard_404">Hard 404</span><p>The server says the page is missing.</p></li>
-        <li><span class="classification soft_404_suspected">Soft 404</span><p>Answers 200, but reads like an error or dumps visitors on the homepage.</p></li>
-        <li><span class="classification redirected">Redirected</span><p>Moves to a working page. Worth a look, not broken.</p></li>
-        <li><span class="classification ok">Healthy</span><p>Loads and reads like a real page.</p></li>
-      </ul>
-      <p class="fine">Search and backlink sources add coverage; no provider guarantees a complete list of indexed pages.</p>
-    </aside>
-  </div>
+  <details class="panel legend-panel">
+    <summary><span><b>Reading the verdicts</b><small>What each page outcome means</small></span><svg aria-hidden="true"><use href="#i-chevron"/></svg></summary>
+    <ul class="legend">
+      <li><span class="classification hard_404">Hard 404</span><p>The server says the page is missing. Redirect it or remove links to it.</p></li>
+      <li><span class="classification soft_404_suspected">Soft 404</span><p>Answers 200, but reads like an error or sends visitors to the homepage.</p></li>
+      <li><span class="classification redirected">Redirected</span><p>Moves to a working page. Worth a look, not broken.</p></li>
+      <li><span class="classification timeout">Timed out · Blocked · Errors</span><p>The page could not be read. Open it yourself; it is not counted as broken.</p></li>
+      <li><span class="classification ok">Healthy</span><p>Loads and reads like a real page.</p></li>
+    </ul>
+    <p class="fine">Search and backlink sources add coverage; no provider guarantees a complete list of indexed pages.</p>
+  </details>
 </section>
 
 <section id="new-audit" class="workspace-view hidden" aria-labelledby="setup-title">
   <div class="page-heading">
     <div>
       <p class="eyebrow">New audit</p>
-      <h1 id="setup-title" tabindex="-1">Create an audit</h1>
-      <p class="lede">Add the restaurants, pick where URLs come from, and every page is checked in a real browser.</p>
+      <h1 id="setup-title" tabindex="-1">Set up an audit</h1>
+      <p class="lede">Choose what to check, add the restaurants, and start. Progress saves as it goes.</p>
     </div>
-    <button id="reset-form" class="button secondary" type="button"><svg aria-hidden="true"><use href="#i-refresh"/></svg><span>Reset form</span></button>
+    <button id="reset-form" class="button secondary compact" type="button"><svg aria-hidden="true"><use href="#i-refresh"/></svg><span>Start over</span></button>
   </div>
   <form id="scan-form" class="setup-layout" novalidate>
     <div class="form-card">
+      <section class="form-section task-section" aria-labelledby="task-heading">
+        <div class="form-section-heading">
+          <span class="form-step" aria-hidden="true"></span>
+          <div>
+            <h2 id="task-heading">What do you want to check?</h2>
+            <p>Choose one or more. Only the settings each check needs are shown below.</p>
+          </div>
+        </div>
+        <fieldset class="task-grid">
+          <legend class="sr-only">Checks to run</legend>
+          <label class="task-card" id="pages-card">
+            <input type="checkbox" id="check-pages" checked>
+            <span class="task-icon" aria-hidden="true"><svg><use href="#i-findings"/></svg></span>
+            <span class="task-copy"><b>Broken pages</b><small>404, gone and soft-404 pages across the site.</small></span>
+            <span class="task-tick" aria-hidden="true"><svg><use href="#i-check"/></svg></span>
+          </label>
+          <label class="task-card" id="profile-card">
+            <input type="checkbox" id="check-profile">
+            <span class="task-icon" aria-hidden="true"><svg><use href="#i-store"/></svg></span>
+            <span class="task-copy"><b>Business profile</b><small>Name, phone, website, hours, menu, booking and ordering links against Google.</small><small class="task-note" id="profile-task-note"></small></span>
+            <span class="task-tick" aria-hidden="true"><svg><use href="#i-check"/></svg></span>
+          </label>
+          <label class="task-card" id="hours-card">
+            <input type="checkbox" id="check-hours">
+            <span class="task-icon" aria-hidden="true"><svg><use href="#i-clock"/></svg></span>
+            <span class="task-copy"><b>Opening hours</b><small>Weekly hours on the website against the Google listing.</small><small class="task-note" id="check-hours-note"></small></span>
+            <span class="task-tick" aria-hidden="true"><svg><use href="#i-check"/></svg></span>
+          </label>
+        </fieldset>
+      </section>
+
       <section class="form-section" aria-labelledby="target-heading">
         <div class="form-section-heading">
-          <span class="form-step" aria-hidden="true">1</span>
+          <span class="form-step" aria-hidden="true"></span>
           <div>
-            <h2 id="target-heading">Add targets</h2>
-            <p>Websites are searched for pages. Exact URLs are checked as they are.</p>
+            <h2 id="target-heading">Restaurants</h2>
+            <p>Add each restaurant’s website, or import a list.</p>
           </div>
         </div>
         <div class="field-group">
           <div class="field-label"><label for="sites">Restaurant websites</label><span id="site-count">0 sites</span></div>
           <textarea id="sites" rows="3" aria-describedby="sites-help" spellcheck="false" placeholder="https://www.yoshidasushi.com&#10;https://anotherrestaurant.com"></textarea>
-          <p class="field-help" id="sites-help">One website per line. By default, pages that appear in Google results are collected and checked.</p>
-        </div>
-        <div class="field-group">
-          <div class="field-label"><label for="urls">Exact URLs</label><span id="url-count">0 URLs</span></div>
-          <textarea id="urls" rows="3" aria-describedby="urls-help" spellcheck="false" placeholder="Paste known URLs or an export of Google result URLs"></textarea>
-          <p class="field-help" id="urls-help">Checks just these pages, without searching the rest of the site.</p>
+          <p class="field-help" id="sites-help">One website per line.</p>
         </div>
         <div class="file-area">
           <label class="file-drop" for="files">
             <input id="files" type="file" multiple accept=".txt,.csv,.xlsx,.xlsm">
             <svg aria-hidden="true"><use href="#i-upload"/></svg>
             <span class="file-copy">
-              <b>Drop a URL list or browse</b>
-              <small>TXT, CSV, XLSX or XLSM, any length. CSV columns for name, address and place_id are read too.</small>
+              <b>Import a list</b>
+              <small>TXT, CSV, XLSX or XLSM. Columns named url, name, address and place_id are read.</small>
               <span id="file-summary">No files selected</span>
             </span>
           </label>
           <button class="text-button hidden" id="clear-files" type="button">Remove files</button>
         </div>
+        <div class="field-group" id="urls-group">
+          <div class="field-label"><label for="urls">Specific pages to check</label><span id="url-count">0 URLs</span></div>
+          <textarea id="urls" rows="2" aria-describedby="urls-help" spellcheck="false" placeholder="Paste known URLs, one per line"></textarea>
+          <p class="field-help" id="urls-help">Checked exactly as given, without searching the rest of the site.</p>
+        </div>
+        <div class="identity-block hidden" id="identity-block">
+          <div class="identity-head"><b>Branch details</b><span>Recommended for chains</span></div>
+          <div class="identity-fields">
+            <div class="field-group wide">
+              <div class="field-label"><label for="profile-address">Street address and postcode</label></div>
+              <input id="profile-address" type="text" autocomplete="off" placeholder="12 High Street, London SE1 2AB">
+            </div>
+            <div class="field-group">
+              <div class="field-label"><label for="profile-name">Restaurant name</label><span>Optional</span></div>
+              <input id="profile-name" type="text" autocomplete="off" placeholder="Trading name">
+            </div>
+            <div class="field-group">
+              <div class="field-label"><label for="profile-place-id">Google Place ID</label><span>Optional</span></div>
+              <input id="profile-place-id" type="text" autocomplete="off" spellcheck="false" placeholder="ChIJ…">
+            </div>
+          </div>
+          <p class="field-help" id="identity-summary">The address picks the right branch when a brand has several on Google. For several restaurants, import a CSV with url, name, address and place_id columns instead.</p>
+        </div>
       </section>
 
-      <section class="form-section sources-section" aria-labelledby="source-heading">
+      <section class="form-section sources-section" id="sources-section" aria-labelledby="source-heading">
         <div class="form-section-heading">
-          <span class="form-step" aria-hidden="true">2</span>
+          <span class="form-step" aria-hidden="true"></span>
           <div>
-            <h2 id="source-heading">Choose where URLs come from</h2>
-            <p>Every source feeds one de-duplicated list, and each URL keeps a record of where it was found.</p>
+            <h2 id="source-heading">Where to look for pages</h2>
+            <p>Every source feeds one list without duplicates, and each page keeps a record of where it was found.</p>
           </div>
         </div>
-        <div class="preset-bar" role="group" aria-label="Discovery presets">
-          <span>Presets</span>
-          <button type="button" data-preset="google" aria-pressed="true">Google results</button>
-          <button type="button" data-preset="all" aria-pressed="false">All sources</button>
-          <button type="button" data-preset="local" aria-pressed="false">Website only</button>
-          <button type="button" data-preset="import" aria-pressed="false">Exact URLs only</button>
+        <div class="preset-bar" role="group" aria-label="Page sources">
+          <button type="button" data-preset="google" aria-pressed="true"><b>Google results</b><small>Pages Google shows</small></button>
+          <button type="button" data-preset="local" aria-pressed="false"><b>The website</b><small>Sitemap and crawl</small></button>
+          <button type="button" data-preset="all" aria-pressed="false"><b>Everything</b><small>All sources</small></button>
+          <button type="button" data-preset="import" aria-pressed="false"><b>My list only</b><small>Pasted or imported</small></button>
         </div>
         <fieldset class="source-grid">
-          <legend class="sr-only">Discovery sources</legend>
+          <legend class="sr-only">Page sources</legend>
           <label class="source-card">
             <input type="checkbox" name="discovery" value="import">
             <span class="source-icon" aria-hidden="true"><svg><use href="#i-file"/></svg></span>
-            <span class="source-copy"><b>Imported URLs</b><small>Pasted URLs and uploaded files</small></span>
-            <span class="source-tag">Core</span>
+            <span class="source-copy"><b>Your list</b><small>Pasted URLs and imported files</small></span>
+            <span class="source-tag">Free</span>
           </label>
           <label class="source-card">
             <input type="checkbox" name="discovery" value="sitemap">
             <span class="source-icon" aria-hidden="true"><svg><use href="#i-sitemap"/></svg></span>
-            <span class="source-copy"><b>Sitemaps</b><small>robots.txt, nested indexes, gzip</small></span>
-            <span class="source-tag">Website</span>
+            <span class="source-copy"><b>Sitemaps</b><small>Every page the site lists</small></span>
+            <span class="source-tag">Free</span>
           </label>
           <label class="source-card">
             <input type="checkbox" name="discovery" value="crawl">
             <span class="source-icon" aria-hidden="true"><svg><use href="#i-crawl"/></svg></span>
-            <span class="source-copy"><b>Site crawl</b><small>Links found on rendered pages</small></span>
-            <span class="source-tag">Deep</span>
+            <span class="source-copy"><b>Site crawl</b><small>Links followed from page to page</small></span>
+            <span class="source-tag">Free · slower</span>
           </label>
           <label class="source-card">
             <input type="checkbox" name="discovery" value="google" checked>
             <span class="source-icon" aria-hidden="true"><svg><use href="#i-search"/></svg></span>
-            <span class="source-copy"><b>Google results</b><small>Organic results via API or a local browser</small></span>
-            <span class="source-tag optional">Optional</span>
+            <span class="source-copy"><b>Google results</b><small>Pages that appear in Google search</small></span>
+            <span class="source-tag">Search credits</span>
           </label>
           <label class="source-card">
             <input type="checkbox" name="discovery" value="gsc">
             <span class="source-icon" aria-hidden="true"><svg><use href="#i-console"/></svg></span>
-            <span class="source-copy"><b>Search Console</b><small>90 days of page and sitemap data</small></span>
-            <span class="source-tag optional">Optional</span>
+            <span class="source-copy"><b>Search Console</b><small>90 days of your Google data</small></span>
+            <span class="source-tag">Sign-in</span>
           </label>
           <label class="source-card">
             <input type="checkbox" name="discovery" value="backlinks">
             <span class="source-icon" aria-hidden="true"><svg><use href="#i-link"/></svg></span>
-            <span class="source-copy"><b>Backlinks</b><small>DataForSEO referring pages</small></span>
-            <span class="source-tag optional">Billed</span>
+            <span class="source-copy"><b>Backlinks</b><small>Pages other sites link to</small></span>
+            <span class="source-tag">Billed</span>
           </label>
         </fieldset>
         <div id="google-settings" class="google-settings">
-          <p id="google-scope-note" class="field-help">Only URLs seen in Google results enter this audit. Websites are used as search targets.</p>
+          <p id="google-scope-note" class="field-help">Only pages seen in Google results enter this audit. Websites are used as search targets.</p>
           <div class="settings-grid">
-            <label><span>Google provider<small>Auto picks the cheapest configured API</small></span><select id="google-provider"><option value="auto">Auto</option><option value="serper">Serper</option><option value="searchapi">SearchApi</option><option value="browser">Local browser (free)</option></select></label>
-            <label><span>Country<small>Two-letter market code</small></span><input id="google-country" value="gb" pattern="[A-Za-z]{2}" maxlength="2" autocomplete="off" required></label>
-            <label><span>Language<small>Google language code</small></span><input id="google-language" value="en" pattern="[A-Za-z]{2,3}(-[A-Za-z]{2,4})?" autocomplete="off" required></label>
-            <label><span>Search pages per site<small>Shared by five queries</small></span><input id="google-max-pages" type="number" min="1" value="50" inputmode="numeric" required></label>
+            <label><span>Search provider<small>Auto picks the cheapest one set up</small></span><select id="google-provider"><option value="auto">Auto</option><option value="serper">Serper</option><option value="searchapi">SearchApi</option><option value="browser">Local browser (free)</option></select></label>
+            <label><span>Country<small>Two-letter code, e.g. gb</small></span><input id="google-country" value="gb" pattern="[A-Za-z]{2}" maxlength="2" autocomplete="off" required></label>
+            <label><span>Language<small>e.g. en</small></span><input id="google-language" value="en" pattern="[A-Za-z]{2,3}(-[A-Za-z]{2,4})?" autocomplete="off" required></label>
+            <label><span>Result pages per site<small>Each page is one search credit</small></span><input id="google-max-pages" type="number" min="1" value="50" inputmode="numeric" required></label>
           </div>
           <p id="google-provider-note" class="field-help">The local browser may pause for a CAPTCHA or consent prompt. API requests use provider credits.</p>
         </div>
       </section>
 
-      <section class="form-section compare-section" aria-labelledby="compare-heading">
+      <section class="form-section compare-section" id="profile-section" aria-labelledby="profile-heading">
         <div class="form-section-heading">
-          <span class="form-step" aria-hidden="true">3</span>
+          <span class="form-step" aria-hidden="true"></span>
           <div>
-            <h2 id="compare-heading">Compare with Google <span class="step-optional">Optional</span></h2>
-            <p>Check what Google shows customers against what the restaurant’s own website says.</p>
+            <h2 id="profile-heading">Where Google’s details come from</h2>
+            <p>The business profile check compares the website with this source.</p>
           </div>
         </div>
-        <div class="compare-card" id="hours-card">
-          <label class="inspection-toggle">
-            <input id="check-hours" type="checkbox">
-            <span class="toggle-track" aria-hidden="true"><span></span></span>
-            <span><b>Opening hours</b><small id="check-hours-note">Needs GOOGLE_MAPS_API_KEY · Places API is billed per request</small></span>
-          </label>
-        </div>
-        <div class="compare-card" id="profile-card">
-          <label class="inspection-toggle">
-            <input id="check-profile" type="checkbox">
-            <span class="toggle-track" aria-hidden="true"><span></span></span>
-            <span><b>Full business profile</b><small>Name, phone, website, hours, menu, reservation and ordering links</small></span>
-          </label>
-          <div id="profile-options" class="compare-body hidden">
+        <div id="profile-options" class="compare-body">
+          <div class="field-group">
+            <select id="profile-mode" aria-label="Google profile source">
+              <option value="public">Public Google listing</option>
+              <option value="managed">Business Profile you manage</option>
+              <option value="imported">Profile details you supply</option>
+            </select>
+            <p class="field-help" id="profile-source-note"></p>
+          </div>
+          <div class="requirement" id="profile-requirement" aria-live="polite">
+            <span class="requirement-dot" aria-hidden="true"></span>
+            <div><b id="profile-requirement-title">Checking…</b><p id="profile-requirement-body"></p></div>
+            <button type="button" class="button secondary compact" id="profile-test-key">Test key</button>
+          </div>
+          <div id="profile-managed" class="hidden">
             <div class="field-group">
-              <div class="field-label"><label for="profile-mode">Where Google’s details come from</label></div>
-              <select id="profile-mode">
-                <option value="public">Public Google Places listing</option>
-                <option value="managed">Business Profile you manage</option>
-                <option value="imported">Profile details you supply</option>
-              </select>
-              <p class="field-help" id="profile-source-note"></p>
-            </div>
-            <div class="requirement" id="profile-requirement" aria-live="polite">
-              <span class="requirement-dot" aria-hidden="true"></span>
-              <div><b id="profile-requirement-title">Checking…</b><p id="profile-requirement-body"></p></div>
-              <button type="button" class="button secondary compact" id="profile-test-key">Test key</button>
-            </div>
-            <div id="profile-managed" class="hidden">
-              <div class="field-group">
-                <div class="field-label"><label for="profile-location">Restaurant location</label></div>
-                <select id="profile-location"><option value="">Select a managed location</option></select>
-                <div class="inline-actions">
-                  <a href="/api/auth/gbp/start" class="button secondary compact">Connect Business Profile</a>
-                  <button id="profile-load-locations" type="button" class="button secondary compact">Load my locations</button>
-                </div>
+              <div class="field-label"><label for="profile-location">Restaurant location</label></div>
+              <select id="profile-location"><option value="">Select a managed location</option></select>
+              <div class="inline-actions">
+                <a href="/api/auth/gbp/start" class="button secondary compact">Connect Business Profile</a>
+                <button id="profile-load-locations" type="button" class="button secondary compact">Load my locations</button>
               </div>
             </div>
-            <div id="profile-imported" class="hidden">
-              <div class="field-group">
-                <div class="field-label"><label for="profile-evidence">Profile details (JSON array)</label></div>
-                <textarea id="profile-evidence" rows="6" spellcheck="false" placeholder='[{"url":"https://example.com","observedAt":"2026-09-09T12:00:00Z","name":"Restaurant","address":"Street and postcode","services":{"menu":[],"reservations":[],"ordering":[]}}]'></textarea>
-              </div>
-            </div>
+          </div>
+          <div id="profile-imported" class="hidden">
             <div class="field-group">
-              <div class="field-label"><label for="profile-address">Branch address</label><span>Recommended</span></div>
-              <input id="profile-address" type="text" autocomplete="off" placeholder="Street address and postcode">
-              <p class="field-help" id="identity-summary">The street address and postcode confirm the branch. Without one, Google’s listing often can’t be verified and every comparison stays unresolved.</p>
+              <div class="field-label"><label for="profile-evidence">Profile details (JSON array)</label></div>
+              <textarea id="profile-evidence" rows="6" spellcheck="false" placeholder='[{"url": "https://example.com", "name": "Restaurant", "address": "Street and postcode", …}]'></textarea>
             </div>
-            <details class="identity-details">
-              <summary><span><b>More identity details</b><small>Trading name and Google Place ID</small></span><svg aria-hidden="true"><use href="#i-chevron"/></svg></summary>
-              <div class="identity-fields">
-                <div class="field-group">
-                  <div class="field-label"><label for="profile-name">Restaurant name</label><span>Optional</span></div>
-                  <input id="profile-name" type="text" autocomplete="off" placeholder="Trading name">
-                </div>
-                <div class="field-group">
-                  <div class="field-label"><label for="profile-place-id">Google Place ID</label><span>Optional</span></div>
-                  <input id="profile-place-id" type="text" autocomplete="off" spellcheck="false" placeholder="ChIJ…">
-                  <p class="field-help">These details describe one restaurant. For several branches, import a CSV with url, name, address and place_id columns.</p>
-                </div>
-              </div>
-            </details>
           </div>
         </div>
       </section>
@@ -324,134 +336,133 @@
       <section class="form-section advanced-section" aria-labelledby="settings-heading">
         <details>
           <summary>
-            <span class="form-step" aria-hidden="true">4</span>
-            <span class="summary-copy"><b id="settings-heading">Advanced settings</b><small>Speed, limits and comparison tolerances</small></span>
-            <span class="settings-summary" id="settings-summary">10 workers</span>
+            <span class="summary-copy"><b id="settings-heading" role="heading" aria-level="2">Settings</b><small>Speed, limits and tolerances. The defaults suit most audits.</small></span>
+            <span class="settings-summary" id="settings-summary"></span>
             <svg aria-hidden="true"><use href="#i-chevron"/></svg>
           </summary>
           <div class="settings-body">
             <div class="settings-group" id="group-speed">
-              <h3>Speed and politeness</h3>
+              <h3>Speed</h3>
               <div class="settings-grid">
-                <label><span>Parallel pages<small>Browser pages at once</small></span><input id="concurrency" type="number" min="1" value="10" inputmode="numeric"></label>
-                <label><span>Per-site limit<small>Pages at once on one website</small></span><input id="per-host" type="number" min="1" value="4" inputmode="numeric"></label>
-                <label><span>Delay per site<small>Milliseconds between page starts</small></span><input id="host-delay" type="number" min="0" value="250" inputmode="numeric"></label>
-                <label><span>Page timeout<small>Milliseconds per attempt</small></span><input id="timeout" type="number" min="1000" value="30000" inputmode="numeric"></label>
+                <label><span>Pages at once<small>Browser pages loading together</small></span><input id="concurrency" type="number" min="1" value="10" inputmode="numeric"></label>
+                <label><span>Per website<small>Pages at once on one website</small></span><input id="per-host" type="number" min="1" value="4" inputmode="numeric"></label>
+                <label><span>Pause per website<small>Milliseconds between pages</small></span><input id="host-delay" type="number" min="0" value="250" inputmode="numeric"></label>
+                <label><span>Page timeout<small>Milliseconds before giving up</small></span><input id="timeout" type="number" min="1000" value="30000" inputmode="numeric"></label>
               </div>
             </div>
             <div class="settings-group hidden" id="group-limits">
               <h3>Source limits</h3>
               <div class="settings-grid">
-                <label data-needs-source="crawl"><span>Crawl cap per site<small>Raise it for larger sites</small></span><input id="crawl-limit" type="number" min="1" value="10000" inputmode="numeric"></label>
+                <label data-needs-source="crawl"><span>Crawl limit per site<small>Raise it for larger sites</small></span><input id="crawl-limit" type="number" min="1" value="10000" inputmode="numeric"></label>
                 <label data-needs-source="gsc"><span>Search Console days<small>Page data window</small></span><input id="gsc-days" type="number" min="1" value="90" inputmode="numeric"></label>
-                <label data-needs-source="backlinks"><span>Backlink rows per site<small>Billed by the provider</small></span><input id="backlink-limit" type="number" min="1" value="100000" inputmode="numeric"></label>
+                <label data-needs-source="backlinks"><span>Backlinks per site<small>Billed by the provider</small></span><input id="backlink-limit" type="number" min="1" value="100000" inputmode="numeric"></label>
               </div>
             </div>
             <div class="settings-group hidden" id="group-compare">
-              <h3>Comparison tuning</h3>
+              <h3>Comparisons</h3>
               <div class="settings-grid">
-                <label data-needs-toggle="check-hours"><span>Hours tolerance<small>Minutes counted as a minor drift</small></span><input id="hours-tolerance" type="number" min="0" value="15" inputmode="numeric"></label>
-                <label data-needs-toggle="check-hours"><span>Hours pages per site<small>Pages read for opening hours</small></span><input id="hours-pages" type="number" min="1" value="5" inputmode="numeric"></label>
-                <label data-needs-toggle="check-profile"><span>Profile pages per site<small>Pages read for profile details</small></span><input id="profile-pages" type="number" min="1" value="20" inputmode="numeric"></label>
+                <label data-needs-toggle="check-hours"><span>Hours tolerance<small>Minutes counted as a minor difference</small></span><input id="hours-tolerance" type="number" min="0" value="15" inputmode="numeric"></label>
+                <label data-needs-toggle="check-hours"><span>Pages read for hours<small>Per restaurant</small></span><input id="hours-pages" type="number" min="1" value="5" inputmode="numeric"></label>
+                <label data-needs-toggle="check-profile"><span>Pages read for profile<small>Per restaurant</small></span><input id="profile-pages" type="number" min="1" value="20" inputmode="numeric"></label>
                 <label data-needs-toggle="check-profile"><span>Profile hours tolerance<small>Differences stay visible either way</small></span><input id="profile-tolerance" type="number" min="0" value="0" inputmode="numeric"></label>
               </div>
             </div>
-            <div class="settings-group" id="group-inspect">
-              <h3>Google Search Console</h3>
+            <div class="settings-group" id="group-inspect" data-needs-source-group="gsc">
+              <h3>Search Console</h3>
               <label class="inspection-toggle">
                 <input id="inspect-google" type="checkbox">
                 <span class="toggle-track" aria-hidden="true"><span></span></span>
-                <span><b>Inspect broken pages in Google</b><small>Uses URL Inspection quota only after live verification</small></span>
+                <span><b>Inspect broken pages in Google</b><small>Uses URL Inspection quota only after a page is confirmed broken</small></span>
               </label>
             </div>
             <div class="settings-footer"><button type="button" class="text-button" id="reset-advanced">Restore default settings</button></div>
           </div>
         </details>
       </section>
-      <div class="form-error" id="form-error" role="alert" aria-live="assertive"></div>
     </div>
 
     <aside class="audit-brief" aria-labelledby="brief-title">
       <div class="docket">
         <div class="docket-head">
           <h2 id="brief-title">Audit ticket</h2>
-          <span class="ready-chip"><span></span>Add a target</span>
+          <span class="ready-chip"><span></span>Add a restaurant</span>
         </div>
         <dl class="brief-facts">
-          <div><dt>Targets</dt><dd id="brief-targets">No targets yet</dd></div>
-          <div><dt>URLs from</dt><dd id="brief-sources">Google results only</dd></div>
-          <div><dt>Checked in</dt><dd>Chromium</dd></div>
-          <div><dt>Google compare</dt><dd id="brief-compare">Not included</dd></div>
-          <div><dt>Exports</dt><dd>Excel · CSV · JSON</dd></div>
+          <div><dt>Checks</dt><dd id="brief-checks">Broken pages</dd></div>
+          <div><dt>Restaurants</dt><dd id="brief-targets">None yet</dd></div>
+          <div id="brief-sources-row"><dt>Pages from</dt><dd id="brief-sources">Google results</dd></div>
+          <div><dt>Reports</dt><dd>Excel · CSV · JSON</dd></div>
         </dl>
-        <p class="launch-detail" id="launch-detail">Add a website, exact URL or file to begin</p>
+        <div class="form-error" id="form-error" role="alert" aria-live="assertive"></div>
+        <p class="launch-detail" id="launch-detail">Add a website, a page or a file to begin</p>
         <button class="button primary launch" type="submit" id="start-button"><span>Start audit</span><svg aria-hidden="true"><use href="#i-arrow"/></svg></button>
-        <p class="brief-note">Progress saves as it goes. Cancel any time and resume without re-checking finished pages.</p>
+        <p class="brief-note" id="brief-note">Cancel any time; resuming never re-checks finished pages.</p>
       </div>
     </aside>
   </form>
 </section>
 
 <section id="audit-workspace" class="workspace-view hidden" aria-labelledby="results-title">
-  <div class="page-heading">
-    <div>
-      <p class="eyebrow">Findings</p>
-      <h1 id="results-title" tabindex="-1">Audit findings</h1>
-      <p class="lede">Live progress, every verdict, and the evidence behind it.</p>
-    </div>
-    <button class="button secondary" id="refresh-runs" type="button"><svg aria-hidden="true"><use href="#i-refresh"/></svg><span>Refresh</span></button>
-  </div>
   <div id="empty-state" class="empty-state">
     <div class="ticket ticket-blank" aria-hidden="true"><span></span><span></span><span></span></div>
-    <h2>No audit open</h2>
-    <p>Start an audit, or open one from your history to see its pages, verdicts and reports.</p>
+    <h1 id="empty-title" tabindex="-1">No audit open</h1>
+    <p>Start an audit, or open one from your list to see its results and reports.</p>
     <div class="empty-actions">
-      <a href="#new-audit" class="button primary"><svg aria-hidden="true"><use href="#i-plus"/></svg><span>Start an audit</span></a>
-      <a href="#run-history" class="button secondary">Open audit history</a>
+      <a href="#new-audit" class="button primary"><svg aria-hidden="true"><use href="#i-plus"/></svg><span>New audit</span></a>
+      <a href="#run-history" class="button secondary">Open an audit</a>
     </div>
   </div>
   <div id="run-view" class="run-view hidden">
-    <section class="run-hero docket" aria-labelledby="run-target">
-      <div class="run-hero-copy">
+    <header class="run-head">
+      <div class="run-title">
+        <p class="eyebrow">Audit <span id="run-id"></span></p>
+        <h1 id="results-title" tabindex="-1"><span id="run-target">Selected audit</span></h1>
         <div class="run-state-line">
           <span class="status-pill" id="run-status">Queued</span>
+          <span class="run-checks" id="run-checks"></span>
           <span class="run-live-indicator" id="run-connection"><span></span>Live updates</span>
         </div>
-        <h2 id="run-target">Selected audit</h2>
-        <p class="run-label">Audit <span id="run-id"></span></p>
-        <p id="progress-message" class="progress-message" aria-live="polite">Waiting to start…</p>
-        <div class="run-actions">
-          <button class="button secondary compact" id="cancel-run" type="button"><svg aria-hidden="true"><use href="#i-stop"/></svg><span>Cancel audit</span></button>
-          <button class="button secondary compact" id="resume-run" type="button"><svg aria-hidden="true"><use href="#i-arrow"/></svg><span>Resume audit</span></button>
-        </div>
       </div>
-      <div class="progress-orb" id="progress-orb" role="img" aria-label="Audit progress">
+      <div class="run-actions">
+        <button class="button secondary compact" id="cancel-run" type="button"><svg aria-hidden="true"><use href="#i-stop"/></svg><span>Cancel audit</span></button>
+        <button class="button primary compact" id="resume-run" type="button"><svg aria-hidden="true"><use href="#i-arrow"/></svg><span>Resume audit</span></button>
+        <button class="icon-button bordered" id="refresh-runs" type="button" aria-label="Refresh this audit" title="Refresh"><svg aria-hidden="true"><use href="#i-refresh"/></svg></button>
+      </div>
+    </header>
+    <section class="run-progress" aria-label="Progress">
+      <div class="progress-line">
+        <div class="progress-bar" id="progress-orb" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="Pages checked"><span></span></div>
         <strong id="progress-percent">0%</strong>
-        <span>checked</span>
       </div>
+      <p id="progress-message" class="progress-message" aria-live="polite">Waiting to start…</p>
+      <ol class="stage-track" aria-label="Audit stages">
+        <li data-stage="discovering"><span class="stage-dot" aria-hidden="true"></span><b>Find pages</b></li>
+        <li data-stage="scanning"><span class="stage-dot" aria-hidden="true"></span><b>Check pages</b></li>
+        <li data-stage="comparing_hours"><span class="stage-dot" aria-hidden="true"></span><b>Hours</b></li>
+        <li data-stage="comparing_profile"><span class="stage-dot" aria-hidden="true"></span><b>Profile</b></li>
+        <li data-stage="reporting"><span class="stage-dot" aria-hidden="true"></span><b>Reports</b></li>
+      </ol>
     </section>
-    <ol class="stage-track" aria-label="Audit stages">
-      <li data-stage="discovering"><span class="stage-dot" aria-hidden="true"></span><span class="stage-copy"><b>Discover</b><small>Collect URLs</small></span></li>
-      <li data-stage="scanning"><span class="stage-dot" aria-hidden="true"></span><span class="stage-copy"><b>Verify</b><small>Render pages</small></span></li>
-      <li data-stage="comparing_hours"><span class="stage-dot" aria-hidden="true"></span><span class="stage-copy"><b>Hours</b><small>Compare schedules</small></span></li>
-      <li data-stage="comparing_profile"><span class="stage-dot" aria-hidden="true"></span><span class="stage-copy"><b>Profile</b><small>Identity and links</small></span></li>
-      <li data-stage="reporting"><span class="stage-dot" aria-hidden="true"></span><span class="stage-copy"><b>Report</b><small>Build exports</small></span></li>
-    </ol>
-    <div id="google-coverage" class="google-coverage hidden" aria-live="polite"></div>
-    <div id="run-warnings" class="run-warnings hidden"></div>
-    <dl class="tally metrics">
-      <div class="metric-card metric-total"><dt>Unique URLs</dt><dd id="metric-total">0</dd><small>De-duplicated list</small></div>
-      <div class="metric-card metric-checked"><dt>Pages checked</dt><dd id="metric-processed">0</dd><small id="checked-caption">Waiting to verify</small></div>
-      <div class="metric-card metric-findings tally-alert"><dt>Broken pages</dt><dd id="metric-findings">0</dd><small>404, 410 and soft 404</small></div>
+    <dl class="metrics">
+      <div class="metric-card metric-total"><dt>Pages found</dt><dd id="metric-total">0</dd><small>Without duplicates</small></div>
+      <div class="metric-card metric-checked"><dt>Pages checked</dt><dd id="metric-processed">0</dd><small id="checked-caption">Waiting to check</small></div>
+      <div class="metric-card metric-findings alert"><dt>Broken pages</dt><dd id="metric-findings">0</dd><small>404, 410 and soft 404</small></div>
       <div class="metric-card metric-backlinks"><dt>Backlinks</dt><dd id="metric-backlinks">0</dd><small>Referring pages found</small></div>
-      <div class="metric-card metric-hours"><dt>Hours mismatches</dt><dd id="metric-hours">0</dd><small>Google and website disagree</small></div>
+      <div class="metric-card metric-hours alert"><dt>Hours to fix</dt><dd id="metric-hours">0</dd><small id="hours-caption">Google and website disagree</small></div>
+      <div class="metric-card metric-profile alert"><dt>Profile issues</dt><dd id="metric-profile">0</dd><small>Mismatches and missing details</small></div>
     </dl>
     <section class="report-center" id="report-center" aria-label="Reports">
       <div class="report-copy"><svg aria-hidden="true"><use href="#i-download"/></svg><span><b>Reports</b><small>Reports appear here when the audit finishes.</small></span></div>
       <div class="downloads" id="downloads"></div>
     </section>
-    <section id="profile-results" class="profile-results hidden" aria-label="Business Profile comparison"></section>
-    <section class="findings-section panel" aria-labelledby="results-heading">
+    <div class="tabs" role="tablist" aria-label="Audit results" id="result-tabs">
+      <button type="button" role="tab" id="tab-pages" data-tab="pages" aria-controls="panel-pages" aria-selected="true"><svg aria-hidden="true"><use href="#i-findings"/></svg>Broken pages<span class="tab-count" id="tab-count-pages"></span></button>
+      <button type="button" role="tab" id="tab-profile" data-tab="profile" aria-controls="panel-profile" aria-selected="false" tabindex="-1"><svg aria-hidden="true"><use href="#i-store"/></svg>Business profile<span class="tab-count" id="tab-count-profile"></span></button>
+      <button type="button" role="tab" id="tab-hours" data-tab="hours" aria-controls="panel-hours" aria-selected="false" tabindex="-1"><svg aria-hidden="true"><use href="#i-clock"/></svg>Opening hours<span class="tab-count" id="tab-count-hours"></span></button>
+      <button type="button" role="tab" id="tab-notes" data-tab="notes" aria-controls="panel-notes" aria-selected="false" tabindex="-1"><svg aria-hidden="true"><use href="#i-note"/></svg>Notes<span class="tab-count" id="tab-count-notes"></span></button>
+    </div>
+    <section id="panel-pages" class="tab-panel findings-section panel" role="tabpanel" aria-labelledby="tab-pages">
+      <div id="google-coverage" class="google-coverage hidden" aria-live="polite"></div>
       <div class="table-toolbar">
         <div>
           <h2 id="results-heading">Checked pages <span id="result-count" class="count-chip">0</span></h2>
@@ -460,11 +471,12 @@
         <div class="table-tools">
           <label class="search-box">
             <svg aria-hidden="true"><use href="#i-search"/></svg>
-            <span class="sr-only">Search checked URLs</span>
+            <span class="sr-only">Search checked pages</span>
             <input id="result-search" type="search" placeholder="Search URLs, titles or reasons" autocomplete="off" spellcheck="false">
           </label>
           <select id="classification-filter" aria-label="Filter by outcome">
             <option value="all">All outcomes</option>
+            <option value="problems">Broken only</option>
             <option value="hard_404">Hard 404</option>
             <option value="gone_410">Gone 410</option>
             <option value="soft_404_suspected">Suspected soft 404</option>
@@ -477,7 +489,7 @@
           </select>
         </div>
       </div>
-      <div class="table-wrap" tabindex="0" role="region" aria-label="Checked URL results">
+      <div class="table-wrap" tabindex="0" role="region" aria-label="Checked page results">
         <table>
           <thead>
             <tr>
@@ -501,42 +513,51 @@
         </div>
       </div>
     </section>
+    <section id="panel-profile" class="tab-panel" role="tabpanel" aria-labelledby="tab-profile" hidden>
+      <div id="profile-results" class="profile-results hidden" aria-label="Business profile comparison"></div>
+    </section>
+    <section id="panel-hours" class="tab-panel" role="tabpanel" aria-labelledby="tab-hours" hidden>
+      <div id="hours-results" class="hours-results"></div>
+    </section>
+    <section id="panel-notes" class="tab-panel panel notes-panel" role="tabpanel" aria-labelledby="tab-notes" hidden>
+      <div id="run-warnings" class="run-warnings hidden"></div>
+      <p id="notes-empty" class="muted">No notes for this audit. Coverage gaps and provider messages appear here.</p>
+    </section>
   </div>
 </section>
 
 <section id="run-history" class="workspace-view hidden" aria-labelledby="history-title">
   <div class="page-heading">
     <div>
-      <p class="eyebrow">History</p>
-      <h1 id="history-title" tabindex="-1">Audit history</h1>
-      <p class="lede">Reopen reports, review findings, or pick up where an audit left off.</p>
+      <p class="eyebrow">Audits</p>
+      <h1 id="history-title" tabindex="-1">All audits</h1>
+      <p class="lede">Open results and reports, or pick up where an audit left off.</p>
     </div>
-    <a href="#new-audit" class="button primary"><svg aria-hidden="true"><use href="#i-plus"/></svg><span>New audit</span></a>
   </div>
   <div class="panel history-panel">
     <div class="table-toolbar">
       <label class="search-box">
         <svg aria-hidden="true"><use href="#i-search"/></svg>
-        <span class="sr-only">Search audit history</span>
+        <span class="sr-only">Search audits</span>
         <input type="search" id="history-search" placeholder="Search by website or audit ID" autocomplete="off" spellcheck="false">
       </label>
       <select id="history-filter" aria-label="Filter by status">
         <option value="all">All statuses</option>
-        <option value="waiting_for_google">Waiting for Google</option>
-        <option value="completed_partial">Partial coverage</option>
         <option value="active">In progress</option>
         <option value="completed">Completed</option>
+        <option value="completed_partial">Partial coverage</option>
+        <option value="waiting_for_google">Waiting for Google</option>
         <option value="cancelled">Cancelled</option>
         <option value="failed">Failed</option>
       </select>
     </div>
-    <div class="history-columns" aria-hidden="true">
+    <div class="history-columns" role="presentation">
       <span>Website and audit</span><span>Status</span><span>Pages checked</span><span>Broken</span><span>Created</span><span></span>
     </div>
     <div id="run-list" class="run-list"></div>
     <div class="history-footer">
       <span id="history-count">0 audits</span>
-      <span>Saved automatically</span>
+      <span id="history-storage">Saved automatically</span>
     </div>
   </div>
 </section>
@@ -546,43 +567,46 @@
     <div>
       <p class="eyebrow">Data sources</p>
       <h1 id="connections-title" tabindex="-1">Connections</h1>
-      <p class="lede">Imports, sitemaps and the site crawl work with no account. Connect a provider when an audit needs more.</p>
+      <p class="lede" id="connections-lede">Imports, sitemaps and the site crawl need no account. Connect a provider when an audit needs more.</p>
     </div>
   </div>
   <div class="connections-grid" id="provider-cards"></div>
-  <details class="panel connection-help">
-    <summary>How to enable a connection<svg aria-hidden="true"><use href="#i-chevron"/></svg></summary>
-    <p>Add the provider credentials to the local <code>.env</code> file, then restart the dashboard. Credentials are never entered or shown in this interface.</p>
+  <details class="panel connection-help" id="connection-help">
+    <summary>How to set up a connection<svg aria-hidden="true"><use href="#i-chevron"/></svg></summary>
+    <p id="credentials-where">Add the provider credentials to the local <code>.env</code> file, then restart the dashboard. Credentials are never entered or shown in this interface.</p>
     <div class="redirect-uri" id="redirect-uri" hidden>
       <p><b>Authorized redirect URI</b> for your Google Cloud OAuth client (Credentials → your Web client → Authorized redirect URIs). Search Console and Business Profile both use it. Open the dashboard at <code id="redirect-origin"></code>, not <code>localhost</code>: Google treats them as different addresses.</p>
       <div class="copy-row"><code id="redirect-uri-value"></code><button type="button" class="button secondary compact" id="copy-redirect-uri">Copy</button></div>
     </div>
     <dl>
       <dt>Google search results</dt>
-      <dd>The local browser works without a key. For an API, set <code>SERPER_API_KEY</code> (Serper, the cheapest) or <code>SEARCHAPI_API_KEY</code>. With both set, Auto uses Serper and falls back to SearchApi.</dd>
-      <dt>Google Search Console</dt>
-      <dd><code>GOOGLE_CLIENT_ID</code> and <code>GOOGLE_CLIENT_SECRET</code>, then connect your account.</dd>
+      <dd>Set <code>SERPER_API_KEY</code> (Serper, the cheapest) or <code>SEARCHAPI_API_KEY</code>. With both set, Auto uses Serper and falls back to SearchApi. The desktop version can also use a local browser without a key.</dd>
+      <dt>Google Maps listing (hours and business profile)</dt>
+      <dd><code>SERPER_API_KEY</code> reads the public Google Maps listing for about 3 credits per restaurant. <code>GOOGLE_MAPS_API_KEY</code> (Places API New) is the fallback; make sure no IP or HTTP-referrer restriction blocks the server, and use <b>Test key</b> to confirm Google accepts it.</dd>
       <dt>DataForSEO backlinks</dt>
       <dd><code>DATAFORSEO_LOGIN</code> and <code>DATAFORSEO_PASSWORD</code></dd>
-      <dt>Google Places (hours and public profile)</dt>
-      <dd><code>GOOGLE_MAPS_API_KEY</code> — an API key, not the OAuth client above. Enable <b>Places API (New)</b> in Google Cloud, and make sure the key has no IP or HTTP-referrer restriction that blocks this machine. Use <b>Test key</b> to confirm Google accepts it.</dd>
-      <dt>Google Business Profile (profile you manage)</dt>
-      <dd><code>GOOGLE_CLIENT_ID</code> and <code>GOOGLE_CLIENT_SECRET</code>, then connect the Google account that manages the restaurant. Google also has to approve Business Profile API access for your Cloud project; until it does, the quota is 0 and loading locations fails.</dd>
+      <dt class="desktop-help">Google Search Console</dt>
+      <dd class="desktop-help"><code>GOOGLE_CLIENT_ID</code> and <code>GOOGLE_CLIENT_SECRET</code>, then connect your account. Desktop version only.</dd>
+      <dt class="desktop-help">Google Business Profile (profile you manage)</dt>
+      <dd class="desktop-help">The same OAuth client, then connect the Google account that manages the restaurant. Google must also approve Business Profile API access for the Cloud project. Desktop version only.</dd>
     </dl>
-    <p>A key that is present is not always a key that works. If a profile audit returns no Google values, test the key here: Google’s own reason for rejecting it is shown in full.</p>
   </details>
 </section>
 </main>
 <footer class="app-footer">
   <span>Signal404 · restaurant site audits</span>
-  <span><span class="footer-dot"></span>Stored locally</span>
+  <span><span class="footer-dot"></span><span id="footer-storage">Stored on this computer</span></span>
 </footer>
 </div>
 </div>
 <dialog id="evidence-dialog" class="evidence-dialog" aria-labelledby="evidence-title">
   <div class="dialog-heading">
     <div><p class="eyebrow">Page evidence</p><h2 id="evidence-title">Why this verdict</h2></div>
-    <button id="close-evidence" class="icon-button" type="button" aria-label="Close page evidence"><svg aria-hidden="true"><use href="#i-close"/></svg></button>
+    <div class="dialog-actions">
+      <button id="previous-evidence" class="icon-button" type="button" aria-label="Previous page"><svg aria-hidden="true" class="flip"><use href="#i-arrow"/></svg></button>
+      <button id="next-evidence" class="icon-button" type="button" aria-label="Next page"><svg aria-hidden="true"><use href="#i-arrow"/></svg></button>
+      <button id="close-evidence" class="icon-button" type="button" aria-label="Close page evidence"><svg aria-hidden="true"><use href="#i-close"/></svg></button>
+    </div>
   </div>
   <div id="evidence-content"></div>
 </dialog>
@@ -592,7 +616,7 @@
   <button id="dismiss-toast" class="icon-button" type="button" aria-label="Dismiss notification"><svg aria-hidden="true"><use href="#i-close"/></svg></button>
 </div>
 <dialog id="command-palette" class="command-palette" aria-label="Quick actions">
-  <form method="dialog"><svg aria-hidden="true"><use href="#i-search"/></svg><input id="command-input" type="search" placeholder="Jump to a page or an audit…" autocomplete="off" aria-label="Type a command"></form>
+  <form method="dialog"><svg aria-hidden="true"><use href="#i-search"/></svg><input id="command-input" type="search" placeholder="Jump to a page, an audit or an action…" autocomplete="off" aria-label="Type a command"></form>
   <ul id="command-list" role="listbox" aria-label="Available actions"></ul>
 </dialog>
 <script src="/runtime.js"></script>

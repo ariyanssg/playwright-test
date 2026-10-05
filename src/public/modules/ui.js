@@ -27,7 +27,7 @@ export function relativeDate(value) {
   if (minutes < 10080) return `${Math.floor(minutes / 1440)}d ago`;
   return new Date(value).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
 }
-const sprite = { arrow: 'arrow', play: 'play', refresh: 'refresh', globe: 'globe', download: 'download', check: 'check', search: 'search', clock: 'clock', link: 'link', file: 'file', store: 'store', alert: 'alert', console: 'console', stop: 'stop', chevron: 'chevron', spark: 'spark', plug: 'plug' };
+const sprite = { arrow: 'arrow', play: 'play', refresh: 'refresh', globe: 'globe', download: 'download', check: 'check', search: 'search', clock: 'clock', link: 'link', file: 'file', store: 'store', alert: 'alert', console: 'console', stop: 'stop', chevron: 'chevron', plug: 'plug', note: 'note' };
 /** Icons come from the inline sprite in index.html, so each use is one tiny element. */
 export const icon = (name) => sprite[name] ? `<svg aria-hidden="true"><use href="#i-${sprite[name]}"/></svg>` : '';
 let toastTimer;
